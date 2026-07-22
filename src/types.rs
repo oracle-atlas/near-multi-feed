@@ -1,9 +1,9 @@
 use near_sdk::borsh::{BorshDeserialize, BorshSerialize};
-use near_sdk::near;
+use near_sdk::{AccountId, near};
 
-// Feed data stored as 22 raw bytes: price (10B big-endian) + agg_ts (6B big-endian) + onchain_ts (6B big-endian).
-// Custom Borsh serializes to exactly 22 bytes (no length prefix, no overhead);
-// JSON view exposes the decoded (price: u128, agg_ts: u64, onchain_ts: u64) fields.
+// Pack feed data as 22 raw bytes: price (10B) + agg_ts (6B) + onchain_ts (6B).
+// Custom Borsh stores exactly 22 bytes (no length prefix, no overhead);
+// JSON view exposes the decoded fields.
 #[near(serializers = [json])]
 #[derive(Clone)]
 pub struct FeedData {
@@ -12,7 +12,7 @@ pub struct FeedData {
     pub onchain_ts: u64,
 }
 
-// ──── Custom Borsh: pack as [u8; 22] — price(10B) + agg_ts(6B) + onchain_ts(6B) ────
+// Custom Borsh: pack as [u8; 22] — price(10B) + agg_ts(6B) + onchain_ts(6B).
 
 impl BorshSerialize for FeedData {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
@@ -28,15 +28,15 @@ impl BorshSerialize for FeedData {
 
 impl BorshDeserialize for FeedData {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        // Read price: 10 bytes directly into low portion of a zeroed [u8; 16].
+        // Read price: 10 bytes into low portion of a zeroed [u8; 16].
         let mut price_buf = [0u8; 16];
         reader.read_exact(&mut price_buf[6..16])?;
         let price = u128::from_be_bytes(price_buf);
-        // Read agg_ts: 6 bytes directly into low portion of a zeroed [u8; 8].
+        // Read agg_ts: 6 bytes into low portion of a zeroed [u8; 8].
         let mut agg_ts_buf = [0u8; 8];
         reader.read_exact(&mut agg_ts_buf[2..8])?;
         let agg_ts = u64::from_be_bytes(agg_ts_buf);
-        // Read onchain_ts: 6 bytes directly into low portion of a zeroed [u8; 8].
+        // Read onchain_ts: 6 bytes into low portion of a zeroed [u8; 8].
         let mut onchain_ts_buf = [0u8; 8];
         reader.read_exact(&mut onchain_ts_buf[2..8])?;
         let onchain_ts = u64::from_be_bytes(onchain_ts_buf);
@@ -48,24 +48,30 @@ impl BorshDeserialize for FeedData {
     }
 }
 
-// ──── Flags — bit-packed u8: paused (bit 0) + openRead (bit 1) ────
+// Flags: bit-packed u8 — openRead (bit 0) + paused (bit 1).
 
-const PAUSED_MASK: u8 = 1 << 0; // Bit 0: paused
-const OPEN_READ_MASK: u8 = 1 << 1; // Bit 1: openRead
+// Map bit 0 to openRead, bit 1 to paused.
+const OPEN_READ_MASK: u8 = 1 << 0;
+const PAUSED_MASK: u8 = 1 << 1;
 
-// Bit-packed contract flags; Borsh serializes as a single u8.
+// Serialize flags as a single u8 via Borsh.
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize, borsh::BorshSchema)]
 pub struct Flags(u8);
 
 impl Flags {
     // Construct flags from initial paused and open_read states.
     pub fn new(is_paused: bool, is_open_read: bool) -> Self {
-        Flags(is_paused as u8 | (is_open_read as u8) << 1)
+        Flags(is_open_read as u8 | (is_paused as u8) << 1)
     }
 
-    // Return whether the paused flag is set.
+    // Return whether the contract is paused (flags > 1).
     pub fn is_paused(&self) -> bool {
-        self.0 & PAUSED_MASK != 0
+        self.0 > 1
+    }
+
+    // Return whether open-read is set AND the contract is not paused (flags == 1).
+    pub fn is_open_read_when_unpaused(&self) -> bool {
+        self.0 == OPEN_READ_MASK
     }
 
     // Return whether the open-read flag is set.
@@ -82,4 +88,21 @@ impl Flags {
     pub fn flip_open_read(&mut self) {
         self.0 ^= OPEN_READ_MASK;
     }
+}
+
+// Submit a single price feed entry via a reporter.
+// Borsh-only: `f` is a high-frequency backend-only batch entrypoint;
+// borsh decoding is far cheaper than JSON parsing — the biggest input-side gas saving.
+#[near(serializers = [borsh])]
+pub struct FeedUpdate {
+    pub feed_id: u32,
+    pub price: u128,
+    pub agg_ts: u64,
+}
+
+// Update role membership: account + desired status (add = true, remove = false).
+#[near(serializers = [json])]
+pub struct RoleUpdate {
+    pub account: AccountId,
+    pub status: bool,
 }

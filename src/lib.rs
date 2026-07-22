@@ -1,13 +1,11 @@
 mod events;
-mod ext;
 mod types;
 
 use near_sdk::store::{IterableSet, LookupMap, LookupSet};
 use near_sdk::{AccountId, BorshStorageKey, PanicOnDefault, env, near, require};
 
 use events::ContractEvent;
-use ext::{FeedUpdate, RoleUpdate};
-use types::{FeedData, Flags};
+use types::{FeedData, FeedUpdate, Flags, RoleUpdate};
 
 // Max allowed drift into the future for a reported aggregated timestamp (seconds).
 const MAX_FUTURE_DRIFT_THRESHOLD: u64 = 60;
@@ -26,10 +24,11 @@ enum StorageKey {
 
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
-pub struct Contract {
+pub struct MultiFeed {
     feeds: LookupMap<u32, FeedData>,
     flags: Flags,
     owner: AccountId,
+    description: String,
     admin: LookupSet<AccountId>,
     products: LookupSet<AccountId>,
     price_reporters: LookupSet<AccountId>,
@@ -37,18 +36,19 @@ pub struct Contract {
 }
 
 #[near]
-impl Contract {
+impl MultiFeed {
     // Initialize the contract with the given owner, role members, and read-access mode.
     // Reverts on duplicate addresses in any role list, or if `open_read_enabled` is
     // true while `authorized_callers` is non-empty.
     #[init]
     pub fn new(
         owner: AccountId,
+        open_read_enabled: bool,
+        description: String,
         admins: Vec<AccountId>,
         products: Vec<AccountId>,
         price_reporters: Vec<AccountId>,
         authorized_callers: Vec<AccountId>,
-        open_read_enabled: bool,
     ) -> Self {
         // Enforce: open-read mode requires no authorized callers;
         // gated-read mode allows an initial whitelist or deferred setup.
@@ -75,6 +75,7 @@ impl Contract {
             feeds: LookupMap::new(StorageKey::Feeds),
             flags,
             owner,
+            description,
             admin: init_lookup_set_role(StorageKey::Admin, admins, |account, status| {
                 ContractEvent::AdminStatusChanged { account, status }
             }),
@@ -109,6 +110,21 @@ impl Contract {
         self.owner.clone()
     }
 
+    // Return the contract description.
+    pub fn description(&self) -> String {
+        self.description.clone()
+    }
+
+    // Return the number of decimals for price values.
+    pub fn decimals(&self) -> u8 {
+        18
+    }
+
+    // Return the contract version.
+    pub fn version(&self) -> u8 {
+        1
+    }
+
     // Return whether the given account holds the admin role.
     pub fn is_admin(&self, account: AccountId) -> bool {
         self.admin.contains(&account)
@@ -139,42 +155,72 @@ impl Contract {
         self.flags.is_open_read()
     }
 
-    // Return the feed data for the given feed ID, or `None` if the feed does not exist.
-    pub fn get_feed(&self, feed_id: u32) -> Option<FeedData> {
-        self.feeds.get(&feed_id).cloned()
+    // Return the feed matching `feed_id`, gated by read-access control.
+    //
+    // # Arguments
+    // * `feed_id` - a `0x`-prefixed 8-hex-char string (EVM `bytes4`)
+    //
+    // # Panics
+    // Panics if the contract is paused, the caller lacks read permission,
+    // or the `feed_id` is malformed.
+    //
+    // # Returns
+    // `Some(feed)` if the feed exists; `None` if absent.
+    pub fn fetch(&self, feed_id: String) -> Option<FeedData> {
+        self.only_read_access();
+        self.feeds.get(&parse_feed_id(&feed_id)).cloned()
     }
 
-    // Report a batch of price feeds. Only callable by a price reporter.
+    // Return feeds for a batch of feed IDs, gated by read-access control.
     //
-    // Reverts if:
-    //   - the caller is not a price reporter,
-    //   - the batch is empty,
-    //   - any entry's aggregated timestamp is not strictly greater than the
-    //     stored one (stale) or is too far in the future.
+    // # Arguments
+    // * `feed_ids` - a list of `0x`-prefixed 8-hex-char strings (EVM `bytes4`)
     //
-    // Not gated by the paused flag: feeding is allowed even while paused.
-    // Duplicate feed_ids within a batch are processed in order; each entry is
-    // validated against the (possibly just-updated) stored timestamp.
-    pub fn feed_prices(&mut self, updates: Vec<FeedUpdate>) {
+    // # Panics
+    // Panics if the contract is paused, the caller lacks read permission,
+    // or any `feed_id` is malformed.
+    //
+    // # Returns
+    // A vector of the same length; each element is `Some(feed)` if the
+    // feed exists, `None` if absent.
+    pub fn fetch_batch(&self, feed_ids: Vec<String>) -> Vec<Option<FeedData>> {
+        self.only_read_access();
+        feed_ids
+            .iter()
+            .map(|id| self.feeds.get(&parse_feed_id(id)).cloned())
+            .collect()
+    }
+
+    // Batch price feed. Only callable by a price reporter.
+    pub fn f(&mut self, #[serializer(borsh)] updates: Vec<FeedUpdate>) {
         require!(
             self.price_reporters
                 .contains(&env::predecessor_account_id()),
             "Only a price reporter can call"
         );
+
         require!(updates.len() > 0, "Empty feed data");
 
-        // Compute block time in seconds; reused for validation and onchain_ts.
+        // Compute block time in seconds; reused for timestamp validation and onchain_ts.
         let now = env::block_timestamp() / NANOS_PER_SEC;
         let future_bound = now + MAX_FUTURE_DRIFT_THRESHOLD;
+
         let mut feed_ids = Vec::with_capacity(updates.len());
+        let mut prices = Vec::with_capacity(updates.len());
+        let mut agg_ts = Vec::with_capacity(updates.len());
+
         for u in updates {
-            // Require agg_ts is strictly newer than stored and not too far in the future.
+            // Validate agg_ts is strictly newer than stored and within future drift.
             let prev_agg_ts = self.feeds.get(&u.feed_id).map(|f| f.agg_ts).unwrap_or(0);
             require!(
                 u.agg_ts > prev_agg_ts && u.agg_ts < future_bound,
-                "Report timestamp out of bounds"
+                format!(
+                    "Report timestamp out of bounds: feed_id={}, prev_agg_ts={}, now={}",
+                    u.feed_id, prev_agg_ts, now
+                )
             );
-            // Write feed entry; onchain_ts is set by the contract, not the reporter.
+
+            // Write feed entry; onchain_ts set by the contract.
             self.feeds.insert(
                 u.feed_id,
                 FeedData {
@@ -183,10 +229,19 @@ impl Contract {
                     onchain_ts: now,
                 },
             );
+
             feed_ids.push(u.feed_id);
+            prices.push(u.price);
+            agg_ts.push(u.agg_ts);
         }
-        // Emit event with the updated feed IDs.
-        ContractEvent::PricesFed { feed_ids }.emit();
+
+        // Emit event for the batch.
+        ContractEvent::F {
+            feed_ids,
+            prices,
+            agg_ts,
+        }
+        .emit();
     }
 
     // Return all accounts in the authorized-caller whitelist.
@@ -327,6 +382,38 @@ impl Contract {
         self.flags.flip_open_read();
         ContractEvent::OpenReadStatusChanged { status }.emit();
     }
+
+    // Enforce read-access control: reverts if paused or the caller lacks permission.
+    // Short-circuit: paused → open-read → authorized caller.
+    // Flags checks are in-memory (cheap); authorized_callers.contains is a storage read (expensive).
+    fn only_read_access(&self) {
+        if self.flags.is_paused() {
+            env::panic_str("Enforced paused");
+        }
+        // (a) open-read && not paused → `flags == 1`, cheapest in-memory compare, first;
+        // (b) authorized caller → storage read, second.
+        if self.flags.is_open_read_when_unpaused()
+            || self
+                .authorized_callers
+                .contains(&env::predecessor_account_id())
+        {
+            return;
+        }
+        env::panic_str("Only authorized caller allowed");
+    }
+}
+
+// Parse a hex-encoded feed ID string (e.g. "0x0000002a") into a u32.
+// Reverts if the input is not prefixed with "0x" or is not exactly 8 hex digits.
+fn parse_feed_id(s: &str) -> u32 {
+    require!(
+        s.len() == 10 && s.starts_with("0x"),
+        "Feed id must be 0x followed by exactly 8 hex digits"
+    );
+    let Ok(v) = u32::from_str_radix(&s[2..], 16) else {
+        env::panic_str("Invalid hex feed id")
+    };
+    v
 }
 
 // Insert or remove a role member from a `LookupSet<AccountId>`.
