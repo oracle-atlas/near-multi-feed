@@ -449,3 +449,331 @@ fn init_lookup_set_role(
     }
     set
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::ContractEvent;
+    use near_sdk::AccountId;
+    use near_sdk::serde_json;
+
+    fn alice() -> AccountId {
+        "alice.near".parse().unwrap()
+    }
+
+    fn bob() -> AccountId {
+        "bob.near".parse().unwrap()
+    }
+
+    fn assert_event_log(log: &str, expected: ContractEvent) {
+        fn event_to_json(event: ContractEvent) -> serde_json::Value {
+            const STANDARD: &str = "multi-feed";
+            const VERSION: &str = "1.0.0";
+            use serde_json::json;
+
+            fn base(event_name: &str, data: serde_json::Value) -> serde_json::Value {
+                json!({
+                    "standard": STANDARD,
+                    "version": VERSION,
+                    "event": event_name,
+                    "data": data,
+                })
+            }
+
+            match event {
+                ContractEvent::OwnershipTransferred {
+                    old_owner,
+                    new_owner,
+                } => base(
+                    "ownership_transferred",
+                    json!({
+                        "old_owner": old_owner.as_ref().map(|o: &AccountId| o.to_string()),
+                        "new_owner": new_owner.to_string(),
+                    }),
+                ),
+                ContractEvent::AdminStatusChanged { account, status } => base(
+                    "admin_status_changed",
+                    json!({
+                        "account": account.to_string(),
+                        "status": status,
+                    }),
+                ),
+                ContractEvent::ProductStatusChanged { account, status } => base(
+                    "product_status_changed",
+                    json!({
+                        "account": account.to_string(),
+                        "status": status,
+                    }),
+                ),
+                ContractEvent::PriceReporterStatusChanged { account, status } => base(
+                    "price_reporter_status_changed",
+                    json!({
+                        "account": account.to_string(),
+                        "status": status,
+                    }),
+                ),
+                ContractEvent::AuthorizedCallerStatusChanged { account, status } => base(
+                    "authorized_caller_status_changed",
+                    json!({
+                        "account": account.to_string(),
+                        "status": status,
+                    }),
+                ),
+                ContractEvent::OpenReadStatusChanged { status } => {
+                    base("open_read_status_changed", json!({ "status": status }))
+                }
+                ContractEvent::PausedStatusChanged { status } => {
+                    base("paused_status_changed", json!({ "status": status }))
+                }
+                ContractEvent::F {
+                    feed_ids,
+                    prices,
+                    agg_ts,
+                } => base(
+                    "f",
+                    json!({
+                        "i": feed_ids,
+                        "p": prices,
+                        "t": agg_ts,
+                    }),
+                ),
+            }
+        }
+
+        let expected_json = event_to_json(expected);
+        let json_str = log
+            .strip_prefix("EVENT_JSON:")
+            .expect("Missing EVENT_JSON prefix");
+        let actual: serde_json::Value = serde_json::from_str(json_str).expect("Invalid JSON");
+        assert_eq!(actual, expected_json, "Event mismatch");
+    }
+
+    mod parse_feed_id {
+        use crate::parse_feed_id;
+
+        #[test]
+        fn valid_zero() {
+            assert_eq!(parse_feed_id("0x00000000"), 0);
+        }
+
+        #[test]
+        fn valid_one() {
+            assert_eq!(parse_feed_id("0x00000001"), 1);
+        }
+
+        #[test]
+        fn valid_max() {
+            assert_eq!(parse_feed_id("0xffffffff"), u32::MAX);
+        }
+
+        #[test]
+        fn valid_arbitrary() {
+            assert_eq!(parse_feed_id("0x0000002a"), 42);
+        }
+
+        #[test]
+        fn valid_uppercase() {
+            assert_eq!(parse_feed_id("0xABCDEF12"), 0xABCDEF12);
+        }
+
+        #[test]
+        fn valid_lowercase() {
+            assert_eq!(parse_feed_id("0xabcdef12"), 0xABCDEF12);
+        }
+
+        #[test]
+        fn valid_mixed_case() {
+            assert_eq!(parse_feed_id("0xAbCdEf12"), 0xABCDEF12);
+        }
+
+        #[test]
+        #[should_panic(expected = "Feed id must be 0x followed by exactly 8 hex digits")]
+        fn missing_prefix() {
+            parse_feed_id("0000002a");
+        }
+
+        #[test]
+        #[should_panic(expected = "Feed id must be 0x followed by exactly 8 hex digits")]
+        fn uppercase_prefix() {
+            parse_feed_id("0X0000002a");
+        }
+
+        #[test]
+        #[should_panic(expected = "Feed id must be 0x followed by exactly 8 hex digits")]
+        fn too_short() {
+            parse_feed_id("0x00002a");
+        }
+
+        #[test]
+        #[should_panic(expected = "Feed id must be 0x followed by exactly 8 hex digits")]
+        fn too_long() {
+            parse_feed_id("0x000000000");
+        }
+
+        #[test]
+        #[should_panic(expected = "Invalid hex feed id")]
+        fn invalid_hex_chars() {
+            parse_feed_id("0x00gh0000");
+        }
+
+        #[test]
+        #[should_panic(expected = "Feed id must be 0x followed by exactly 8 hex digits")]
+        fn empty() {
+            parse_feed_id("");
+        }
+    }
+
+    mod update_role_member {
+        use super::{alice, assert_event_log, bob};
+        use crate::{ContractEvent, update_role_member};
+        use near_sdk::store::LookupSet;
+        use near_sdk::test_utils::get_logs;
+
+        #[test]
+        fn add() {
+            let mut set = LookupSet::new(crate::StorageKey::Admin);
+            update_role_member(&mut set, alice(), true, |account, status| {
+                ContractEvent::PriceReporterStatusChanged { account, status }
+            });
+            assert!(set.contains(&alice()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: alice(),
+                    status: true,
+                },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Already in role")]
+        fn add_duplicate() {
+            let mut set = LookupSet::new(crate::StorageKey::Admin);
+            update_role_member(&mut set, alice(), true, |account, status| {
+                ContractEvent::PriceReporterStatusChanged { account, status }
+            });
+            update_role_member(&mut set, alice(), true, |account, status| {
+                ContractEvent::PriceReporterStatusChanged { account, status }
+            });
+        }
+
+        #[test]
+        fn remove() {
+            let mut set = LookupSet::new(crate::StorageKey::Admin);
+            update_role_member(&mut set, alice(), true, |account, status| {
+                ContractEvent::PriceReporterStatusChanged { account, status }
+            });
+            update_role_member(&mut set, alice(), false, |account, status| {
+                ContractEvent::PriceReporterStatusChanged { account, status }
+            });
+            assert!(!set.contains(&alice()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[1],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: alice(),
+                    status: false,
+                },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Not in role")]
+        fn remove_not_in_role() {
+            let mut set = LookupSet::new(crate::StorageKey::Admin);
+            update_role_member(&mut set, alice(), false, |account, status| {
+                ContractEvent::PriceReporterStatusChanged { account, status }
+            });
+        }
+
+        #[test]
+        fn add_bob_after_remove_alice() {
+            let mut set = LookupSet::new(crate::StorageKey::Admin);
+            update_role_member(&mut set, alice(), true, |account, status| {
+                ContractEvent::PriceReporterStatusChanged { account, status }
+            });
+            update_role_member(&mut set, alice(), false, |account, status| {
+                ContractEvent::PriceReporterStatusChanged { account, status }
+            });
+            update_role_member(&mut set, bob(), true, |account, status| {
+                ContractEvent::PriceReporterStatusChanged { account, status }
+            });
+            assert!(!set.contains(&alice()));
+            assert!(set.contains(&bob()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[2],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: bob(),
+                    status: true,
+                },
+            );
+        }
+    }
+
+    mod init_lookup_set_role {
+        use super::{alice, assert_event_log, bob};
+        use crate::{ContractEvent, StorageKey, init_lookup_set_role};
+        use near_sdk::test_utils::get_logs;
+
+        #[test]
+        fn empty() {
+            let set = init_lookup_set_role(StorageKey::Admin, vec![], |account, status| {
+                ContractEvent::PriceReporterStatusChanged { account, status }
+            });
+            assert!(!set.contains(&alice()));
+        }
+
+        #[test]
+        fn single() {
+            let set = init_lookup_set_role(StorageKey::Admin, vec![alice()], |account, status| {
+                ContractEvent::PriceReporterStatusChanged { account, status }
+            });
+            assert!(set.contains(&alice()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: alice(),
+                    status: true,
+                },
+            );
+        }
+
+        #[test]
+        fn multiple() {
+            let set = init_lookup_set_role(
+                StorageKey::Admin,
+                vec![alice(), bob()],
+                |account, status| ContractEvent::PriceReporterStatusChanged { account, status },
+            );
+            assert!(set.contains(&alice()));
+            assert!(set.contains(&bob()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: alice(),
+                    status: true,
+                },
+            );
+            assert_event_log(
+                &logs[1],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: bob(),
+                    status: true,
+                },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Already in role")]
+        fn duplicate() {
+            init_lookup_set_role(
+                StorageKey::Admin,
+                vec![alice(), alice()],
+                |account, status| ContractEvent::PriceReporterStatusChanged { account, status },
+            );
+        }
+    }
+}
