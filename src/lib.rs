@@ -105,92 +105,6 @@ impl MultiFeed {
         }
     }
 
-    // Return the current contract owner.
-    pub fn get_owner(&self) -> AccountId {
-        self.owner.clone()
-    }
-
-    // Return the contract description.
-    pub fn description(&self) -> String {
-        self.description.clone()
-    }
-
-    // Return the number of decimals for price values.
-    pub fn decimals(&self) -> u8 {
-        18
-    }
-
-    // Return the contract version.
-    pub fn version(&self) -> u8 {
-        1
-    }
-
-    // Return whether the given account holds the admin role.
-    pub fn is_admin(&self, account: AccountId) -> bool {
-        self.admin.contains(&account)
-    }
-
-    // Return whether the given account holds the product role.
-    pub fn is_product(&self, account: AccountId) -> bool {
-        self.products.contains(&account)
-    }
-
-    // Return whether the given account holds the price-reporter role.
-    pub fn is_price_reporter(&self, account: AccountId) -> bool {
-        self.price_reporters.contains(&account)
-    }
-
-    // Return whether the given account is in the authorized-caller whitelist.
-    pub fn is_authorized_caller(&self, account: AccountId) -> bool {
-        self.authorized_callers.contains(&account)
-    }
-
-    // Return whether the contract is currently paused.
-    pub fn is_paused(&self) -> bool {
-        self.flags.is_paused()
-    }
-
-    // Return whether reads are open (permissionless) or gated by the authorized-caller whitelist.
-    pub fn is_open_read(&self) -> bool {
-        self.flags.is_open_read()
-    }
-
-    // Return the feed matching `feed_id`, gated by read-access control.
-    //
-    // # Arguments
-    // * `feed_id` - a `0x`-prefixed 8-hex-char string (EVM `bytes4`)
-    //
-    // # Panics
-    // Panics if the contract is paused, the caller lacks read permission,
-    // or the `feed_id` is malformed.
-    //
-    // # Returns
-    // `Some(feed)` if the feed exists; `None` if absent.
-    pub fn fetch(&self, feed_id: String) -> Option<FeedData> {
-        self.only_read_access();
-        self.feeds.get(&parse_feed_id(&feed_id)).cloned()
-    }
-
-    // Return feeds for a batch of feed IDs, gated by read-access control.
-    //
-    // # Arguments
-    // * `feed_ids` - a list of `0x`-prefixed 8-hex-char strings (EVM `bytes4`)
-    //
-    // # Panics
-    // Panics if the contract is paused, the caller lacks read permission,
-    // or any `feed_id` is malformed.
-    //
-    // # Returns
-    // A vector of the same length; each element is `Some(feed)` if the
-    // feed exists, `None` if absent.
-    pub fn fetch_batch(&self, feed_ids: Vec<String>) -> Vec<Option<FeedData>> {
-        self.only_read_access();
-        feed_ids
-            .iter()
-            .map(|id| self.feeds.get(&parse_feed_id(id)).cloned())
-            .collect()
-    }
-
     // Batch price feed. Only callable by a price reporter.
     pub fn f(&mut self, #[serializer(borsh)] updates: Vec<FeedUpdate>) {
         require!(
@@ -244,12 +158,7 @@ impl MultiFeed {
         .emit();
     }
 
-    // Return all accounts in the authorized-caller whitelist.
-    pub fn get_authorized_callers(&self) -> Vec<AccountId> {
-        self.authorized_callers.iter().cloned().collect()
-    }
-
-    // Transfer contract ownership to a new account.
+    // Transfer ownership to a new account. Only callable by the current owner.
     // Reverts if the new owner is the same as the current one.
     pub fn transfer_ownership(&mut self, new_owner: AccountId) {
         require!(
@@ -271,7 +180,7 @@ impl MultiFeed {
         .emit();
     }
 
-    // Batch-update admin role memberships.
+    // Update admin role memberships. Only callable by the owner.
     // Reverts on empty input or if any update is redundant.
     pub fn set_admins(&mut self, updates: Vec<RoleUpdate>) {
         require!(
@@ -289,7 +198,7 @@ impl MultiFeed {
         }
     }
 
-    // Batch-update product role memberships.
+    // Update product role memberships. Only callable by the owner.
     // Reverts on empty input or if any update is redundant.
     pub fn set_products(&mut self, updates: Vec<RoleUpdate>) {
         require!(
@@ -307,7 +216,7 @@ impl MultiFeed {
         }
     }
 
-    // Batch-update price-reporter role memberships.
+    // Update price-reporter role memberships. Only callable by the owner.
     // Reverts on empty input or if any update is redundant.
     pub fn set_price_reporters(&mut self, updates: Vec<RoleUpdate>) {
         require!(
@@ -383,6 +292,96 @@ impl MultiFeed {
         ContractEvent::OpenReadStatusChanged { status }.emit();
     }
 
+    // Return the feed matching `feed_id`, gated by read-access control.
+    //
+    // # Arguments
+    // * `feed_id` - a `0x`-prefixed 8-hex-char string (EVM `bytes4`)
+    //
+    // # Panics
+    // Panics if the contract is paused, the caller lacks read permission,
+    // or the `feed_id` is malformed.
+    //
+    // # Returns
+    // `Some(feed)` if the feed exists; `None` if absent.
+    pub fn fetch(&self, feed_id: String) -> Option<FeedData> {
+        self.only_read_access();
+        self.feeds.get(&parse_feed_id(&feed_id)).cloned()
+    }
+
+    // Return feeds for a batch of feed IDs, gated by read-access control.
+    //
+    // # Arguments
+    // * `feed_ids` - a list of `0x`-prefixed 8-hex-char strings (EVM `bytes4`)
+    //
+    // # Panics
+    // Panics if the contract is paused, the caller lacks read permission,
+    // or any `feed_id` is malformed.
+    //
+    // # Returns
+    // A vector of the same length; each element is `Some(feed)` if the
+    // feed exists, `None` if absent.
+    pub fn fetch_batch(&self, feed_ids: Vec<String>) -> Vec<Option<FeedData>> {
+        self.only_read_access();
+        feed_ids
+            .iter()
+            .map(|id| self.feeds.get(&parse_feed_id(id)).cloned())
+            .collect()
+    }
+
+    // Return the current contract owner.
+    pub fn get_owner(&self) -> AccountId {
+        self.owner.clone()
+    }
+
+    // Return the contract description.
+    pub fn description(&self) -> String {
+        self.description.clone()
+    }
+
+    // Return the number of decimals for price values.
+    pub fn decimals(&self) -> u8 {
+        18
+    }
+
+    // Return the contract version.
+    pub fn version(&self) -> u8 {
+        1
+    }
+
+    // Return whether the given account holds the admin role.
+    pub fn is_admin(&self, account: AccountId) -> bool {
+        self.admin.contains(&account)
+    }
+
+    // Return whether the given account holds the product role.
+    pub fn is_product(&self, account: AccountId) -> bool {
+        self.products.contains(&account)
+    }
+
+    // Return whether the given account holds the price-reporter role.
+    pub fn is_price_reporter(&self, account: AccountId) -> bool {
+        self.price_reporters.contains(&account)
+    }
+
+    pub fn is_authorized_caller(&self, account: AccountId) -> bool {
+        self.authorized_callers.contains(&account)
+    }
+
+    // Return whether the contract is currently paused.
+    pub fn is_paused(&self) -> bool {
+        self.flags.is_paused()
+    }
+
+    // Return whether reads are open (permissionless) or gated by the authorized-caller whitelist.
+    pub fn is_open_read(&self) -> bool {
+        self.flags.is_open_read()
+    }
+
+    // Return all accounts in the authorized-caller whitelist.
+    pub fn get_authorized_callers(&self) -> Vec<AccountId> {
+        self.authorized_callers.iter().cloned().collect()
+    }
+
     // Enforce read-access control: reverts if paused or the caller lacks permission.
     // Short-circuit: paused → open-read → authorized caller.
     // Flags checks are in-memory (cheap); authorized_callers.contains is a storage read (expensive).
@@ -452,9 +451,8 @@ fn init_lookup_set_role(
 
 #[cfg(test)]
 mod tests {
-    use crate::ContractEvent;
-    use near_sdk::AccountId;
-    use near_sdk::serde_json;
+    use crate::{ContractEvent, MultiFeed};
+    use near_sdk::{AccountId, serde_json, testing_env};
 
     fn alice() -> AccountId {
         "alice.near".parse().unwrap()
@@ -462,6 +460,18 @@ mod tests {
 
     fn bob() -> AccountId {
         "bob.near".parse().unwrap()
+    }
+
+    fn owner() -> AccountId {
+        "owner.near".parse().unwrap()
+    }
+
+    fn set_caller(account: AccountId) {
+        testing_env!(
+            near_sdk::test_utils::VMContextBuilder::new()
+                .predecessor_account_id(account)
+                .build()
+        );
     }
 
     fn assert_event_log(log: &str, expected: ContractEvent) {
@@ -545,6 +555,18 @@ mod tests {
             .expect("Missing EVENT_JSON prefix");
         let actual: serde_json::Value = serde_json::from_str(json_str).expect("Invalid JSON");
         assert_eq!(actual, expected_json, "Event mismatch");
+    }
+
+    fn init_contract() -> MultiFeed {
+        MultiFeed::new(
+            owner(),
+            false,
+            "Test".to_string(),
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        )
     }
 
     mod parse_feed_id {
@@ -773,6 +795,943 @@ mod tests {
                 StorageKey::Admin,
                 vec![alice(), alice()],
                 |account, status| ContractEvent::PriceReporterStatusChanged { account, status },
+            );
+        }
+    }
+
+    mod new {
+        use super::{alice, assert_event_log, bob, owner};
+        use crate::{ContractEvent, MultiFeed};
+        use near_sdk::test_utils::get_logs;
+
+        #[test]
+        fn gated_mode_init() {
+            let contract = MultiFeed::new(
+                owner(),
+                false,
+                "Gated Mode".to_string(),
+                vec![alice()],
+                vec![bob()],
+                vec![alice()],
+                vec![alice(), bob()],
+            );
+            assert_eq!(contract.get_owner(), owner());
+            assert_eq!(contract.description(), "Gated Mode");
+            assert!(!contract.is_paused());
+            assert!(!contract.is_open_read());
+            assert!(contract.is_admin(alice()));
+            assert!(contract.is_product(bob()));
+            assert!(contract.is_price_reporter(alice()));
+            assert!(contract.is_authorized_caller(alice()));
+            assert!(contract.is_authorized_caller(bob()));
+
+            let callers = contract.get_authorized_callers();
+            assert_eq!(callers.len(), 2);
+            assert!(callers.contains(&alice()));
+            assert!(callers.contains(&bob()));
+
+            let logs = get_logs();
+            assert_eq!(logs.len(), 7);
+            // Init events.
+            assert_event_log(
+                &logs[0],
+                ContractEvent::OwnershipTransferred {
+                    old_owner: None,
+                    new_owner: owner(),
+                },
+            );
+            assert_event_log(
+                &logs[1],
+                ContractEvent::OpenReadStatusChanged { status: false },
+            );
+            // Role events.
+            assert_event_log(
+                &logs[2],
+                ContractEvent::AdminStatusChanged {
+                    account: alice(),
+                    status: true,
+                },
+            );
+            assert_event_log(
+                &logs[3],
+                ContractEvent::ProductStatusChanged {
+                    account: bob(),
+                    status: true,
+                },
+            );
+            assert_event_log(
+                &logs[4],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: alice(),
+                    status: true,
+                },
+            );
+            assert_event_log(
+                &logs[5],
+                ContractEvent::AuthorizedCallerStatusChanged {
+                    account: alice(),
+                    status: true,
+                },
+            );
+            assert_event_log(
+                &logs[6],
+                ContractEvent::AuthorizedCallerStatusChanged {
+                    account: bob(),
+                    status: true,
+                },
+            );
+        }
+
+        #[test]
+        fn open_read_mode_init() {
+            let contract = MultiFeed::new(
+                owner(),
+                true,
+                "Open Read Mode".to_string(),
+                vec![],
+                vec![],
+                vec![],
+                vec![],
+            );
+            assert!(contract.is_open_read());
+            assert!(!contract.is_paused());
+            assert_eq!(contract.get_owner(), owner());
+            assert_eq!(contract.description(), "Open Read Mode");
+            assert!(contract.get_authorized_callers().is_empty());
+
+            let logs = get_logs();
+            assert_eq!(logs.len(), 2);
+            assert_event_log(
+                &logs[0],
+                ContractEvent::OwnershipTransferred {
+                    old_owner: None,
+                    new_owner: owner(),
+                },
+            );
+            assert_event_log(
+                &logs[1],
+                ContractEvent::OpenReadStatusChanged { status: true },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Open read incompatible with authorized callers")]
+        fn open_read_with_callers() {
+            MultiFeed::new(
+                owner(),
+                true,
+                "Invalid".to_string(),
+                vec![],
+                vec![],
+                vec![],
+                vec![alice()],
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Already in role")]
+        fn duplicate_admin() {
+            MultiFeed::new(
+                owner(),
+                false,
+                "Test".to_string(),
+                vec![alice(), alice()],
+                vec![],
+                vec![],
+                vec![],
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Already in role")]
+        fn duplicate_product() {
+            MultiFeed::new(
+                owner(),
+                false,
+                "Test".to_string(),
+                vec![],
+                vec![bob(), bob()],
+                vec![],
+                vec![],
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Already in role")]
+        fn duplicate_price_reporter() {
+            MultiFeed::new(
+                owner(),
+                false,
+                "Test".to_string(),
+                vec![],
+                vec![],
+                vec![alice(), alice()],
+                vec![],
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Already an authorized caller")]
+        fn duplicate_authorized_caller() {
+            MultiFeed::new(
+                owner(),
+                false,
+                "Test".to_string(),
+                vec![],
+                vec![],
+                vec![],
+                vec![bob(), bob()],
+            );
+        }
+    }
+
+    mod transfer_ownership {
+        use super::init_contract;
+        use super::{alice, assert_event_log, owner, set_caller};
+        use crate::ContractEvent;
+        use near_sdk::test_utils::get_logs;
+
+        #[test]
+        fn transfer() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.transfer_ownership(alice());
+            assert_eq!(contract.get_owner(), alice());
+
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::OwnershipTransferred {
+                    old_owner: Some(owner()),
+                    new_owner: alice(),
+                },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Only the owner can call")]
+        fn non_owner_cannot_transfer() {
+            let mut contract = init_contract();
+            set_caller(alice());
+            contract.transfer_ownership(alice());
+        }
+
+        #[test]
+        #[should_panic(expected = "New owner must differ from the current owner")]
+        fn same_owner() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.transfer_ownership(owner());
+        }
+    }
+
+    mod set_admins {
+        use super::{alice, assert_event_log, bob, init_contract, owner, set_caller};
+        use crate::{ContractEvent, RoleUpdate};
+        use near_sdk::test_utils::get_logs;
+
+        #[test]
+        fn add() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_admins(vec![RoleUpdate {
+                account: alice(),
+                status: true,
+            }]);
+            assert!(contract.is_admin(alice()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::AdminStatusChanged {
+                    account: alice(),
+                    status: true,
+                },
+            );
+        }
+
+        #[test]
+        fn batch_add() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_admins(vec![
+                RoleUpdate {
+                    account: alice(),
+                    status: true,
+                },
+                RoleUpdate {
+                    account: bob(),
+                    status: true,
+                },
+            ]);
+            assert!(contract.is_admin(alice()));
+            assert!(contract.is_admin(bob()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::AdminStatusChanged {
+                    account: alice(),
+                    status: true,
+                },
+            );
+            assert_event_log(
+                &logs[1],
+                ContractEvent::AdminStatusChanged {
+                    account: bob(),
+                    status: true,
+                },
+            );
+        }
+
+        #[test]
+        fn remove() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_admins(vec![RoleUpdate {
+                account: alice(),
+                status: true,
+            }]);
+            contract.set_admins(vec![RoleUpdate {
+                account: alice(),
+                status: false,
+            }]);
+            assert!(!contract.is_admin(alice()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[1],
+                ContractEvent::AdminStatusChanged {
+                    account: alice(),
+                    status: false,
+                },
+            );
+        }
+
+        #[test]
+        fn batch_remove() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            // Add both first.
+            contract.set_admins(vec![
+                RoleUpdate {
+                    account: alice(),
+                    status: true,
+                },
+                RoleUpdate {
+                    account: bob(),
+                    status: true,
+                },
+            ]);
+            // Remove both in one call.
+            contract.set_admins(vec![
+                RoleUpdate {
+                    account: alice(),
+                    status: false,
+                },
+                RoleUpdate {
+                    account: bob(),
+                    status: false,
+                },
+            ]);
+            assert!(!contract.is_admin(alice()));
+            assert!(!contract.is_admin(bob()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[2],
+                ContractEvent::AdminStatusChanged {
+                    account: alice(),
+                    status: false,
+                },
+            );
+            assert_event_log(
+                &logs[3],
+                ContractEvent::AdminStatusChanged {
+                    account: bob(),
+                    status: false,
+                },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Only the owner can call")]
+        fn non_owner() {
+            let mut contract = init_contract();
+            set_caller(alice());
+            contract.set_admins(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+        }
+
+        #[test]
+        #[should_panic(expected = "Empty updates array")]
+        fn empty_updates() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_admins(vec![]);
+        }
+
+        #[test]
+        #[should_panic(expected = "Already in role")]
+        fn duplicate_add() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_admins(vec![RoleUpdate {
+                account: alice(),
+                status: true,
+            }]);
+            contract.set_admins(vec![RoleUpdate {
+                account: alice(),
+                status: true,
+            }]);
+        }
+
+        #[test]
+        #[should_panic(expected = "Not in role")]
+        fn remove_not_in_role() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_admins(vec![RoleUpdate {
+                account: alice(),
+                status: false,
+            }]);
+        }
+    }
+
+    mod set_products {
+        use super::init_contract;
+        use super::{alice, assert_event_log, bob, owner, set_caller};
+        use crate::{ContractEvent, RoleUpdate};
+        use near_sdk::test_utils::get_logs;
+
+        #[test]
+        fn add() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_products(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+            assert!(contract.is_product(bob()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::ProductStatusChanged {
+                    account: bob(),
+                    status: true,
+                },
+            );
+        }
+
+        #[test]
+        fn remove() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_products(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+            contract.set_products(vec![RoleUpdate {
+                account: bob(),
+                status: false,
+            }]);
+            assert!(!contract.is_product(bob()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[1],
+                ContractEvent::ProductStatusChanged {
+                    account: bob(),
+                    status: false,
+                },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Only the owner can call")]
+        fn non_owner() {
+            let mut contract = init_contract();
+            set_caller(alice());
+            contract.set_products(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+        }
+
+        #[test]
+        #[should_panic(expected = "Empty updates array")]
+        fn empty_updates() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_products(vec![]);
+        }
+
+        #[test]
+        #[should_panic(expected = "Already in role")]
+        fn duplicate_add() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_products(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+            contract.set_products(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+        }
+
+        #[test]
+        fn batch_add() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_products(vec![
+                RoleUpdate {
+                    account: alice(),
+                    status: true,
+                },
+                RoleUpdate {
+                    account: bob(),
+                    status: true,
+                },
+            ]);
+            assert!(contract.is_product(alice()));
+            assert!(contract.is_product(bob()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::ProductStatusChanged {
+                    account: alice(),
+                    status: true,
+                },
+            );
+            assert_event_log(
+                &logs[1],
+                ContractEvent::ProductStatusChanged {
+                    account: bob(),
+                    status: true,
+                },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Not in role")]
+        fn remove_not_in_role() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_products(vec![RoleUpdate {
+                account: alice(),
+                status: false,
+            }]);
+        }
+
+        #[test]
+        fn batch_remove() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_products(vec![
+                RoleUpdate {
+                    account: alice(),
+                    status: true,
+                },
+                RoleUpdate {
+                    account: bob(),
+                    status: true,
+                },
+            ]);
+            contract.set_products(vec![
+                RoleUpdate {
+                    account: alice(),
+                    status: false,
+                },
+                RoleUpdate {
+                    account: bob(),
+                    status: false,
+                },
+            ]);
+            assert!(!contract.is_product(alice()));
+            assert!(!contract.is_product(bob()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[2],
+                ContractEvent::ProductStatusChanged {
+                    account: alice(),
+                    status: false,
+                },
+            );
+            assert_event_log(
+                &logs[3],
+                ContractEvent::ProductStatusChanged {
+                    account: bob(),
+                    status: false,
+                },
+            );
+        }
+    }
+
+    mod set_price_reporters {
+        use super::init_contract;
+        use super::{alice, assert_event_log, bob, owner, set_caller};
+        use crate::{ContractEvent, RoleUpdate};
+        use near_sdk::test_utils::get_logs;
+
+        #[test]
+        fn add() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_price_reporters(vec![RoleUpdate {
+                account: alice(),
+                status: true,
+            }]);
+            assert!(contract.is_price_reporter(alice()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: alice(),
+                    status: true,
+                },
+            );
+        }
+
+        #[test]
+        fn remove() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_price_reporters(vec![RoleUpdate {
+                account: alice(),
+                status: true,
+            }]);
+            contract.set_price_reporters(vec![RoleUpdate {
+                account: alice(),
+                status: false,
+            }]);
+            assert!(!contract.is_price_reporter(alice()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[1],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: alice(),
+                    status: false,
+                },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Only the owner can call")]
+        fn non_owner() {
+            let mut contract = init_contract();
+            set_caller(alice());
+            contract.set_price_reporters(vec![RoleUpdate {
+                account: alice(),
+                status: true,
+            }]);
+        }
+
+        #[test]
+        #[should_panic(expected = "Empty updates array")]
+        fn empty_updates() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_price_reporters(vec![]);
+        }
+
+        #[test]
+        #[should_panic(expected = "Already in role")]
+        fn duplicate_add() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_price_reporters(vec![RoleUpdate {
+                account: alice(),
+                status: true,
+            }]);
+            contract.set_price_reporters(vec![RoleUpdate {
+                account: alice(),
+                status: true,
+            }]);
+        }
+
+        #[test]
+        fn batch_add() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_price_reporters(vec![
+                RoleUpdate {
+                    account: alice(),
+                    status: true,
+                },
+                RoleUpdate {
+                    account: bob(),
+                    status: true,
+                },
+            ]);
+            assert!(contract.is_price_reporter(alice()));
+            assert!(contract.is_price_reporter(bob()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: alice(),
+                    status: true,
+                },
+            );
+            assert_event_log(
+                &logs[1],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: bob(),
+                    status: true,
+                },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Not in role")]
+        fn remove_not_in_role() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_price_reporters(vec![RoleUpdate {
+                account: alice(),
+                status: false,
+            }]);
+        }
+
+        #[test]
+        fn batch_remove() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_price_reporters(vec![
+                RoleUpdate {
+                    account: alice(),
+                    status: true,
+                },
+                RoleUpdate {
+                    account: bob(),
+                    status: true,
+                },
+            ]);
+            contract.set_price_reporters(vec![
+                RoleUpdate {
+                    account: alice(),
+                    status: false,
+                },
+                RoleUpdate {
+                    account: bob(),
+                    status: false,
+                },
+            ]);
+            assert!(!contract.is_price_reporter(alice()));
+            assert!(!contract.is_price_reporter(bob()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[2],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: alice(),
+                    status: false,
+                },
+            );
+            assert_event_log(
+                &logs[3],
+                ContractEvent::PriceReporterStatusChanged {
+                    account: bob(),
+                    status: false,
+                },
+            );
+        }
+    }
+
+    mod set_authorized_callers {
+        use super::{alice, assert_event_log, bob, owner, set_caller};
+        use crate::{ContractEvent, MultiFeed, RoleUpdate};
+        use near_sdk::test_utils::get_logs;
+
+        fn init_contract_with_product() -> MultiFeed {
+            MultiFeed::new(
+                owner(),
+                false,
+                "Test".to_string(),
+                vec![],
+                vec![alice()],
+                vec![],
+                vec![],
+            )
+        }
+
+        #[test]
+        fn add() {
+            let mut contract = init_contract_with_product();
+            set_caller(alice());
+            contract.set_authorized_callers(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+            assert!(contract.is_authorized_caller(bob()));
+            let callers = contract.get_authorized_callers();
+            assert_eq!(callers.len(), 1);
+            assert!(callers.contains(&bob()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::AuthorizedCallerStatusChanged {
+                    account: bob(),
+                    status: true,
+                },
+            );
+        }
+
+        #[test]
+        fn remove() {
+            let mut contract = init_contract_with_product();
+            set_caller(alice());
+            contract.set_authorized_callers(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+            contract.set_authorized_callers(vec![RoleUpdate {
+                account: bob(),
+                status: false,
+            }]);
+            assert!(!contract.is_authorized_caller(bob()));
+            let callers = contract.get_authorized_callers();
+            assert!(callers.is_empty());
+            let logs = get_logs();
+            assert_event_log(
+                &logs[1],
+                ContractEvent::AuthorizedCallerStatusChanged {
+                    account: bob(),
+                    status: false,
+                },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Only a product can call")]
+        fn non_product() {
+            let mut contract = init_contract_with_product();
+            set_caller(owner());
+            contract.set_authorized_callers(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+        }
+
+        #[test]
+        #[should_panic(expected = "Empty updates array")]
+        fn empty_updates() {
+            let mut contract = init_contract_with_product();
+            set_caller(alice());
+            contract.set_authorized_callers(vec![]);
+        }
+
+        #[test]
+        fn duplicate_add_skipped() {
+            let mut contract = init_contract_with_product();
+            set_caller(alice());
+            contract.set_authorized_callers(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+            contract.set_authorized_callers(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+            assert!(contract.is_authorized_caller(bob()));
+            let callers = contract.get_authorized_callers();
+            assert_eq!(callers.len(), 1);
+            assert!(callers.contains(&bob()));
+            let logs = get_logs();
+            assert_eq!(logs.len(), 1);
+        }
+
+        #[test]
+        fn remove_not_in_role_skipped() {
+            let mut contract = init_contract_with_product();
+            set_caller(alice());
+            contract.set_authorized_callers(vec![RoleUpdate {
+                account: bob(),
+                status: false,
+            }]);
+            let callers = contract.get_authorized_callers();
+            assert!(callers.is_empty());
+            let logs = get_logs();
+            assert!(logs.is_empty());
+        }
+
+        #[test]
+        fn batch_add() {
+            let mut contract = init_contract_with_product();
+            set_caller(alice());
+            contract.set_authorized_callers(vec![
+                RoleUpdate {
+                    account: alice(),
+                    status: true,
+                },
+                RoleUpdate {
+                    account: bob(),
+                    status: true,
+                },
+            ]);
+            assert!(contract.is_authorized_caller(alice()));
+            assert!(contract.is_authorized_caller(bob()));
+            let callers = contract.get_authorized_callers();
+            assert_eq!(callers.len(), 2);
+            assert!(callers.contains(&alice()));
+            assert!(callers.contains(&bob()));
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::AuthorizedCallerStatusChanged {
+                    account: alice(),
+                    status: true,
+                },
+            );
+            assert_event_log(
+                &logs[1],
+                ContractEvent::AuthorizedCallerStatusChanged {
+                    account: bob(),
+                    status: true,
+                },
+            );
+        }
+
+        #[test]
+        fn batch_remove() {
+            let mut contract = init_contract_with_product();
+            set_caller(alice());
+            contract.set_authorized_callers(vec![
+                RoleUpdate {
+                    account: alice(),
+                    status: true,
+                },
+                RoleUpdate {
+                    account: bob(),
+                    status: true,
+                },
+            ]);
+            contract.set_authorized_callers(vec![
+                RoleUpdate {
+                    account: alice(),
+                    status: false,
+                },
+                RoleUpdate {
+                    account: bob(),
+                    status: false,
+                },
+            ]);
+            assert!(!contract.is_authorized_caller(alice()));
+            assert!(!contract.is_authorized_caller(bob()));
+            let callers = contract.get_authorized_callers();
+            assert!(callers.is_empty());
+            let logs = get_logs();
+            assert_event_log(
+                &logs[2],
+                ContractEvent::AuthorizedCallerStatusChanged {
+                    account: alice(),
+                    status: false,
+                },
+            );
+            assert_event_log(
+                &logs[3],
+                ContractEvent::AuthorizedCallerStatusChanged {
+                    account: bob(),
+                    status: false,
+                },
             );
         }
     }
