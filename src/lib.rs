@@ -113,7 +113,9 @@ impl MultiFeed {
             "Only a price reporter can call"
         );
 
-        require!(updates.len() > 0, "Empty feed data");
+        if updates.is_empty() {
+            env::panic_str("Empty feed data")
+        }
 
         // Compute block time in seconds; reused for timestamp validation and onchain_ts.
         let now = env::block_timestamp() / NANOS_PER_SEC;
@@ -265,7 +267,7 @@ impl MultiFeed {
         }
     }
 
-    // Toggle the contract paused state.
+    // Set the contract paused state. Only callable by an admin.
     // Reverts if the contract is already in the target state.
     pub fn set_paused(&mut self, paused: bool) {
         require!(
@@ -277,7 +279,7 @@ impl MultiFeed {
         ContractEvent::PausedStatusChanged { status: paused }.emit();
     }
 
-    // Toggle the open-read flag.
+    // Set the open-read flag. Only callable by the owner.
     // Reverts if the flag is already in the target state.
     pub fn set_open_read_status(&mut self, status: bool) {
         require!(
@@ -451,7 +453,7 @@ fn init_lookup_set_role(
 
 #[cfg(test)]
 mod tests {
-    use crate::{ContractEvent, MultiFeed};
+    use crate::{ContractEvent, MultiFeed, types::FeedUpdate};
     use near_sdk::{AccountId, serde_json, testing_env};
 
     fn alice() -> AccountId {
@@ -470,6 +472,15 @@ mod tests {
         testing_env!(
             near_sdk::test_utils::VMContextBuilder::new()
                 .predecessor_account_id(account)
+                .build()
+        );
+    }
+
+    fn set_context(account: AccountId, block_ts_secs: u64) {
+        testing_env!(
+            near_sdk::test_utils::VMContextBuilder::new()
+                .predecessor_account_id(account)
+                .block_timestamp(block_ts_secs * crate::NANOS_PER_SEC)
                 .build()
         );
     }
@@ -567,6 +578,35 @@ mod tests {
             vec![],
             vec![],
         )
+    }
+
+    fn init_gated_with_roles() -> MultiFeed {
+        MultiFeed::new(
+            owner(),
+            false,
+            "Gated".to_string(),
+            vec![alice()],
+            vec![],
+            vec![alice()],
+            vec![alice()],
+        )
+    }
+
+    // Seed feed_id=1 and feed_id=2 as alice (a price reporter).
+    fn seed(contract: &mut MultiFeed, now_seconds_on_chain: u64) {
+        set_context(alice(), now_seconds_on_chain);
+        contract.f(vec![
+            FeedUpdate {
+                feed_id: 1,
+                price: 100,
+                agg_ts: now_seconds_on_chain - 1,
+            },
+            FeedUpdate {
+                feed_id: 2,
+                price: 200,
+                agg_ts: now_seconds_on_chain - 1,
+            },
+        ]);
     }
 
     mod parse_feed_id {
@@ -1022,6 +1062,36 @@ mod tests {
             let mut contract = init_contract();
             set_caller(owner());
             contract.transfer_ownership(owner());
+        }
+
+        #[test]
+        #[should_panic(expected = "Only the owner can call")]
+        fn old_owner_loses_power_after_transfer() {
+            use super::bob;
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.transfer_ownership(alice());
+
+            set_caller(owner());
+            contract.set_admins(vec![crate::RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+        }
+
+        #[test]
+        fn new_owner_gains_power_after_transfer() {
+            use super::bob;
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.transfer_ownership(alice());
+
+            set_caller(alice());
+            contract.set_admins(vec![crate::RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+            assert!(contract.is_admin(bob()));
         }
     }
 
@@ -1733,6 +1803,732 @@ mod tests {
                     status: false,
                 },
             );
+        }
+
+        #[test]
+        #[should_panic(expected = "Only a product can call")]
+        fn removed_product_cannot_set_authorized_callers() {
+            let mut contract = init_contract_with_product();
+            set_caller(owner());
+            contract.set_products(vec![RoleUpdate {
+                account: alice(),
+                status: false,
+            }]);
+
+            set_caller(alice());
+            contract.set_authorized_callers(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+        }
+    }
+
+    mod set_paused {
+        use super::{alice, assert_event_log, bob, owner, set_caller};
+        use crate::{ContractEvent, MultiFeed};
+        use near_sdk::test_utils::get_logs;
+
+        fn init_contract_with_admin() -> MultiFeed {
+            MultiFeed::new(
+                owner(),
+                false,
+                "Test".to_string(),
+                vec![alice()],
+                vec![],
+                vec![],
+                vec![],
+            )
+        }
+
+        #[test]
+        fn pause() {
+            let mut contract = init_contract_with_admin();
+            set_caller(alice());
+            contract.set_paused(true);
+            assert!(contract.is_paused());
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::PausedStatusChanged { status: true },
+            );
+        }
+
+        #[test]
+        fn unpause() {
+            let mut contract = init_contract_with_admin();
+            set_caller(alice());
+            contract.set_paused(true);
+            contract.set_paused(false);
+            assert!(!contract.is_paused());
+            let logs = get_logs();
+            assert_event_log(
+                &logs[1],
+                ContractEvent::PausedStatusChanged { status: false },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Only an admin can call")]
+        fn non_admin_cannot_pause() {
+            let mut contract = init_contract_with_admin();
+            set_caller(bob());
+            contract.set_paused(true);
+        }
+
+        #[test]
+        #[should_panic(expected = "Already in target state")]
+        fn already_paused() {
+            let mut contract = init_contract_with_admin();
+            set_caller(alice());
+            contract.set_paused(true);
+            contract.set_paused(true);
+        }
+
+        #[test]
+        #[should_panic(expected = "Already in target state")]
+        fn already_unpaused() {
+            let mut contract = init_contract_with_admin();
+            set_caller(alice());
+            contract.set_paused(false);
+        }
+    }
+
+    mod set_open_read_status {
+        use super::{alice, assert_event_log, init_contract, owner, set_caller};
+        use crate::ContractEvent;
+        use near_sdk::test_utils::get_logs;
+
+        #[test]
+        fn enable() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_open_read_status(true);
+            assert!(contract.is_open_read());
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::OpenReadStatusChanged { status: true },
+            );
+        }
+
+        #[test]
+        fn disable() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_open_read_status(true);
+            contract.set_open_read_status(false);
+            assert!(!contract.is_open_read());
+            let logs = get_logs();
+            assert_event_log(
+                &logs[1],
+                ContractEvent::OpenReadStatusChanged { status: false },
+            );
+        }
+
+        #[test]
+        #[should_panic(expected = "Only the owner can call")]
+        fn non_owner_cannot_set() {
+            let mut contract = init_contract();
+            set_caller(alice());
+            contract.set_open_read_status(true);
+        }
+
+        #[test]
+        #[should_panic(expected = "Already in target state")]
+        fn already_enabled() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_open_read_status(true);
+            contract.set_open_read_status(true);
+        }
+
+        #[test]
+        #[should_panic(expected = "Already in target state")]
+        fn already_disabled() {
+            let mut contract = init_contract();
+            set_caller(owner());
+            contract.set_open_read_status(false);
+        }
+    }
+
+    mod f {
+        use super::{alice, assert_event_log, bob, owner, set_context};
+        use crate::types::FeedUpdate;
+        use crate::{ContractEvent, MAX_FUTURE_DRIFT_THRESHOLD, MultiFeed};
+        use near_sdk::test_utils::get_logs;
+
+        fn init_contract_with_reporter() -> MultiFeed {
+            MultiFeed::new(
+                owner(),
+                true,
+                "Test".to_string(),
+                vec![],
+                vec![],
+                vec![alice()],
+                vec![],
+            )
+        }
+
+        const NOW: u64 = 1_000_000;
+
+        #[test]
+        fn single_feed() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            contract.f(vec![FeedUpdate {
+                feed_id: 42,
+                price: 1234,
+                agg_ts: NOW - 1,
+            }]);
+            let logs = get_logs();
+            assert_event_log(
+                &logs[0],
+                ContractEvent::F {
+                    feed_ids: vec![42],
+                    prices: vec![1234],
+                    agg_ts: vec![NOW - 1],
+                },
+            );
+            let feed = contract.fetch("0x0000002a".to_string()).unwrap();
+            assert_eq!(feed.price, 1234);
+            assert_eq!(feed.agg_ts, NOW - 1);
+            assert_eq!(feed.onchain_ts, NOW);
+        }
+
+        #[test]
+        fn batch_feeds() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            contract.f(vec![
+                FeedUpdate {
+                    feed_id: 1,
+                    price: 100,
+                    agg_ts: NOW - 10,
+                },
+                FeedUpdate {
+                    feed_id: 2,
+                    price: 200,
+                    agg_ts: NOW - 5,
+                },
+                FeedUpdate {
+                    feed_id: 3,
+                    price: 300,
+                    agg_ts: NOW - 1,
+                },
+            ]);
+            let logs = get_logs();
+            assert_eq!(logs.len(), 1);
+            assert_event_log(
+                &logs[0],
+                ContractEvent::F {
+                    feed_ids: vec![1, 2, 3],
+                    prices: vec![100, 200, 300],
+                    agg_ts: vec![NOW - 10, NOW - 5, NOW - 1],
+                },
+            );
+            let feeds = contract.fetch_batch(vec![
+                "0x00000001".to_string(),
+                "0x00000002".to_string(),
+                "0x00000003".to_string(),
+            ]);
+            assert_eq!(feeds[0].as_ref().unwrap().price, 100);
+            assert_eq!(feeds[1].as_ref().unwrap().price, 200);
+            assert_eq!(feeds[2].as_ref().unwrap().price, 300);
+        }
+
+        #[test]
+        fn update_existing_feed_with_newer_ts() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            contract.f(vec![FeedUpdate {
+                feed_id: 7,
+                price: 111,
+                agg_ts: NOW - 100,
+            }]);
+            contract.f(vec![FeedUpdate {
+                feed_id: 7,
+                price: 222,
+                agg_ts: NOW - 50,
+            }]);
+            let feed = contract.fetch("0x00000007".to_string()).unwrap();
+            assert_eq!(feed.price, 222);
+            assert_eq!(feed.agg_ts, NOW - 50);
+        }
+
+        #[test]
+        fn agg_ts_equal_to_future_bound_boundary() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            contract.f(vec![FeedUpdate {
+                feed_id: 1,
+                price: 1,
+                agg_ts: NOW + MAX_FUTURE_DRIFT_THRESHOLD - 1,
+            }]);
+            let feed = contract.fetch("0x00000001".to_string()).unwrap();
+            assert_eq!(feed.agg_ts, NOW + MAX_FUTURE_DRIFT_THRESHOLD - 1);
+        }
+
+        #[test]
+        #[should_panic(expected = "Only a price reporter can call")]
+        fn non_reporter_cannot_call() {
+            let mut contract = init_contract_with_reporter();
+            set_context(bob(), NOW);
+            contract.f(vec![FeedUpdate {
+                feed_id: 1,
+                price: 1,
+                agg_ts: NOW - 1,
+            }]);
+        }
+
+        #[test]
+        #[should_panic(expected = "Empty feed data")]
+        fn empty_updates() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            contract.f(vec![]);
+        }
+
+        #[test]
+        #[should_panic(
+            expected = "Report timestamp out of bounds: feed_id=1, prev_agg_ts=0, now=1000000"
+        )]
+        fn agg_ts_too_far_in_future() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            contract.f(vec![FeedUpdate {
+                feed_id: 1,
+                price: 1,
+                agg_ts: NOW + MAX_FUTURE_DRIFT_THRESHOLD,
+            }]);
+        }
+
+        #[test]
+        #[should_panic(
+            expected = "Report timestamp out of bounds: feed_id=1, prev_agg_ts=0, now=1000000"
+        )]
+        fn agg_ts_not_newer_than_zero() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            contract.f(vec![FeedUpdate {
+                feed_id: 1,
+                price: 1,
+                agg_ts: 0,
+            }]);
+        }
+
+        #[test]
+        #[should_panic(
+            expected = "Report timestamp out of bounds: feed_id=1, prev_agg_ts=999990, now=1000000"
+        )]
+        fn agg_ts_not_newer_than_stored() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            contract.f(vec![FeedUpdate {
+                feed_id: 1,
+                price: 1,
+                agg_ts: NOW - 10,
+            }]);
+            contract.f(vec![FeedUpdate {
+                feed_id: 1,
+                price: 2,
+                agg_ts: NOW - 10,
+            }]);
+        }
+
+        #[test]
+        #[should_panic(
+            expected = "Report timestamp out of bounds: feed_id=1, prev_agg_ts=999990, now=1000000"
+        )]
+        fn agg_ts_older_than_stored() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            contract.f(vec![FeedUpdate {
+                feed_id: 1,
+                price: 1,
+                agg_ts: NOW - 10,
+            }]);
+            contract.f(vec![FeedUpdate {
+                feed_id: 1,
+                price: 2,
+                agg_ts: NOW - 20,
+            }]);
+        }
+
+        #[test]
+        fn max_price_and_feed_id() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            contract.f(vec![FeedUpdate {
+                feed_id: u32::MAX,
+                price: (1u128 << 80) - 1,
+                agg_ts: NOW - 1,
+            }]);
+            let feed = contract.fetch("0xffffffff".to_string()).unwrap();
+            assert_eq!(feed.price, (1u128 << 80) - 1);
+        }
+
+        #[test]
+        fn onchain_ts_is_block_time_not_agg_ts() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            let future_agg = NOW + MAX_FUTURE_DRIFT_THRESHOLD - 1;
+            contract.f(vec![FeedUpdate {
+                feed_id: 1,
+                price: 1,
+                agg_ts: future_agg,
+            }]);
+            let feed = contract.fetch("0x00000001".to_string()).unwrap();
+            assert_eq!(feed.onchain_ts, NOW);
+            assert_ne!(feed.onchain_ts, feed.agg_ts);
+        }
+
+        #[test]
+        fn duplicate_feed_id_in_batch_monotonic_ok() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            // Same feed_id twice, agg_ts strictly increasing → both pass; last one wins.
+            contract.f(vec![
+                FeedUpdate {
+                    feed_id: 5,
+                    price: 100,
+                    agg_ts: NOW - 10,
+                },
+                FeedUpdate {
+                    feed_id: 5,
+                    price: 200,
+                    agg_ts: NOW - 9,
+                },
+            ]);
+            let feed = contract.fetch("0x00000005".to_string()).unwrap();
+            assert_eq!(feed.price, 200);
+            assert_eq!(feed.agg_ts, NOW - 9);
+        }
+
+        #[test]
+        #[should_panic(
+            expected = "Report timestamp out of bounds: feed_id=5, prev_agg_ts=999995, now=1000000"
+        )]
+        fn duplicate_feed_id_in_batch_must_be_monotonic() {
+            let mut contract = init_contract_with_reporter();
+            set_context(alice(), NOW);
+            contract.f(vec![
+                FeedUpdate {
+                    feed_id: 5,
+                    price: 100,
+                    agg_ts: NOW - 5,
+                },
+                FeedUpdate {
+                    feed_id: 5,
+                    price: 200,
+                    agg_ts: NOW - 5, // not strictly greater than the just-stored NOW-5
+                },
+            ]);
+        }
+
+        #[test]
+        #[should_panic(expected = "Only a price reporter can call")]
+        fn removed_reporter_cannot_feed() {
+            let mut contract = init_contract_with_reporter();
+            set_context(owner(), NOW);
+            contract.set_price_reporters(vec![crate::RoleUpdate {
+                account: alice(),
+                status: false,
+            }]);
+
+            set_context(alice(), NOW);
+            contract.f(vec![FeedUpdate {
+                feed_id: 1,
+                price: 1,
+                agg_ts: NOW - 1,
+            }]);
+        }
+    }
+
+    mod fetch {
+        use super::{alice, bob, owner, set_caller};
+        use crate::MultiFeed;
+        use crate::tests::{init_gated_with_roles, seed};
+        use crate::types::RoleUpdate;
+
+        const NOW: u64 = 1_000_000;
+
+        fn init_gated_with_product() -> MultiFeed {
+            MultiFeed::new(
+                owner(),
+                false,
+                "Gated".to_string(),
+                vec![alice()],
+                vec![alice()],
+                vec![alice()],
+                vec![alice()],
+            )
+        }
+
+        #[test]
+        fn authorized_caller_can_read_both() {
+            let mut contract = init_gated_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(alice());
+
+            // fetch
+            assert_eq!(contract.fetch("0x00000001".to_string()).unwrap().price, 100);
+            assert_eq!(contract.fetch("0x00000002".to_string()).unwrap().price, 200);
+
+            // fetch_batch
+            let feeds =
+                contract.fetch_batch(vec!["0x00000001".to_string(), "0x00000002".to_string()]);
+            assert_eq!(feeds[0].as_ref().unwrap().price, 100);
+            assert_eq!(feeds[1].as_ref().unwrap().price, 200);
+        }
+
+        #[test]
+        fn newly_authorized_caller_can_read_both() {
+            let mut contract = init_gated_with_product();
+            seed(&mut contract, NOW);
+
+            set_caller(alice());
+            contract.set_authorized_callers(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+
+            set_caller(bob());
+            assert_eq!(contract.fetch("0x00000001".to_string()).unwrap().price, 100);
+            assert_eq!(contract.fetch("0x00000002".to_string()).unwrap().price, 200);
+            let feeds =
+                contract.fetch_batch(vec!["0x00000002".to_string(), "0x00000001".to_string()]);
+            assert_eq!(feeds[0].as_ref().unwrap().price, 200);
+            assert_eq!(feeds[1].as_ref().unwrap().price, 100);
+        }
+
+        #[test]
+        #[should_panic(expected = "Only authorized caller allowed")]
+        fn non_authorized_caller_cannot_fetch() {
+            let mut contract = init_gated_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(bob());
+            contract.fetch("0x00000001".to_string());
+        }
+
+        #[test]
+        #[should_panic(expected = "Only authorized caller allowed")]
+        fn non_authorized_caller_cannot_fetch_batch() {
+            let mut contract = init_gated_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(bob());
+            contract.fetch_batch(vec!["0x00000001".to_string()]);
+        }
+
+        // Access control runs BEFORE the feeds lookup: a non-authorized caller
+        // cannot even probe a missing feed's existence (must panic, not get None).
+        #[test]
+        #[should_panic(expected = "Only authorized caller allowed")]
+        fn access_checked_before_lookup_on_missing_feed() {
+            let contract = init_gated_with_roles();
+            // No seed → feed absent; access control must still reject first
+            set_caller(bob());
+            contract.fetch("0x00000009".to_string());
+        }
+
+        #[test]
+        #[should_panic(expected = "Only authorized caller allowed")]
+        fn revoked_caller_cannot_fetch() {
+            let mut contract = init_gated_with_product();
+            seed(&mut contract, NOW);
+            set_caller(alice());
+            contract.set_authorized_callers(vec![RoleUpdate {
+                account: bob(),
+                status: true,
+            }]);
+            contract.set_authorized_callers(vec![RoleUpdate {
+                account: bob(),
+                status: false,
+            }]);
+            set_caller(bob());
+            contract.fetch("0x00000001".to_string());
+        }
+
+        #[test]
+        #[should_panic(expected = "Enforced paused")]
+        fn paused_blocks_authorized_caller_fetch() {
+            let mut contract = init_gated_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(alice());
+            contract.set_paused(true);
+
+            // Alice is authorized, but paused takes precedence
+            set_caller(alice());
+            contract.fetch("0x00000001".to_string());
+        }
+
+        #[test]
+        #[should_panic(expected = "Enforced paused")]
+        fn paused_blocks_authorized_caller_fetch_batch() {
+            let mut contract = init_gated_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(alice());
+            contract.set_paused(true);
+
+            // Alice is authorized, but paused takes precedence
+            set_caller(alice());
+            contract.fetch_batch(vec!["0x00000001".to_string()]);
+        }
+
+        #[test]
+        fn fetch_missing_feed_returns_none() {
+            let mut contract = init_gated_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(alice());
+            assert!(contract.fetch("0x00000009".to_string()).is_none());
+        }
+
+        #[test]
+        #[should_panic(expected = "Feed id must be 0x followed by exactly 8 hex digits")]
+        fn fetch_rejects_malformed_id() {
+            let mut contract = init_gated_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(alice());
+            contract.fetch("bad".to_string());
+        }
+    }
+
+    // fetch_batch-specific semantics (fetch can't cover these).
+    mod fetch_batch {
+        use super::{alice, init_gated_with_roles, seed, set_caller};
+
+        const NOW: u64 = 1_000_000;
+
+        // Order preserved; missing feeds map to None at the correct positions.
+        #[test]
+        fn preserves_order_and_missing() {
+            let mut contract = init_gated_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(alice());
+            let feeds = contract.fetch_batch(vec![
+                "0x00000003".to_string(), // absent
+                "0x00000001".to_string(), // present → 100
+                "0x00000002".to_string(), // present → 200
+                "0x00000009".to_string(), // absent
+            ]);
+            assert_eq!(feeds.len(), 4);
+            assert!(feeds[0].is_none());
+            assert_eq!(feeds[1].as_ref().unwrap().price, 100);
+            assert_eq!(feeds[2].as_ref().unwrap().price, 200);
+            assert!(feeds[3].is_none());
+        }
+
+        #[test]
+        fn empty_input() {
+            let mut contract = init_gated_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(alice());
+            let feeds = contract.fetch_batch(vec![]);
+            assert!(feeds.is_empty());
+        }
+
+        #[test]
+        #[should_panic(expected = "Feed id must be 0x followed by exactly 8 hex digits")]
+        fn rejects_malformed_id() {
+            let mut contract = init_gated_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(alice());
+            contract.fetch_batch(vec![
+                "0x00000001".to_string(),
+                "bad".to_string(), // malformed
+            ]);
+        }
+    }
+
+    // Open-read mode: reads are permissionless (any caller), but paused still blocks.
+    mod open_read {
+        use super::{alice, bob, owner, seed, set_caller};
+        use crate::{MultiFeed, tests::init_gated_with_roles};
+
+        const NOW: u64 = 1_000_000;
+
+        fn init_open_read_with_roles() -> MultiFeed {
+            MultiFeed::new(
+                owner(),
+                true,
+                "Open".to_string(),
+                vec![alice()],
+                vec![],
+                vec![alice()],
+                vec![],
+            )
+        }
+
+        #[test]
+        fn any_caller_can_read_both() {
+            let mut contract = init_open_read_with_roles();
+            seed(&mut contract, NOW);
+            // Bob has no role and is not whitelisted
+            set_caller(bob());
+            assert_eq!(contract.fetch("0x00000001".to_string()).unwrap().price, 100);
+            let feeds =
+                contract.fetch_batch(vec!["0x00000001".to_string(), "0x00000002".to_string()]);
+            assert_eq!(feeds[0].as_ref().unwrap().price, 100);
+            assert_eq!(feeds[1].as_ref().unwrap().price, 200);
+        }
+
+        #[test]
+        fn any_caller_missing_feed_returns_none() {
+            let mut contract = init_open_read_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(bob());
+            assert!(contract.fetch("0x00000009".to_string()).is_none());
+            let feeds = contract.fetch_batch(vec!["0x00000009".to_string()]);
+            assert!(feeds[0].is_none());
+        }
+
+        #[test]
+        #[should_panic(expected = "Enforced paused")]
+        fn paused_blocks_even_in_open_read() {
+            let mut contract = init_open_read_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(alice());
+            contract.set_paused(true);
+
+            // Open-read would allow, but paused wins
+            set_caller(bob());
+            contract.fetch("0x00000001".to_string());
+        }
+
+        #[test]
+        fn enabling_open_read_grants_access() {
+            let mut contract = init_gated_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(owner());
+            contract.set_open_read_status(true); // Gated → Open
+            set_caller(bob()); // Previously denied
+            assert_eq!(contract.fetch("0x00000001".to_string()).unwrap().price, 100);
+        }
+
+        #[test]
+        #[should_panic(expected = "Only authorized caller allowed")]
+        fn disabling_open_read_revokes_access() {
+            let mut contract = init_open_read_with_roles();
+            seed(&mut contract, NOW);
+            set_caller(owner());
+            contract.set_open_read_status(false); // Open → Gated
+            set_caller(bob()); // Now not whitelisted → denied
+            contract.fetch("0x00000001".to_string());
+        }
+    }
+
+    mod metadata {
+        use super::init_contract;
+
+        #[test]
+        fn decimals() {
+            let contract = init_contract();
+            assert_eq!(contract.decimals(), 18);
+        }
+
+        #[test]
+        fn version() {
+            let contract = init_contract();
+            assert_eq!(contract.version(), 1);
         }
     }
 }
