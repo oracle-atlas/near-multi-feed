@@ -1,63 +1,104 @@
-# Basic Auction Contract 
+# Multi Feed (NEAR)
 
-This directory contains a Rust contract that is used as part of the [Basic Auction Tutorial](https://docs.near.org/tutorials/auction/basic-auction).
+A NEAR price feed oracle contract. Backend reporters submit batched price data via Borsh; consumers read via JSON. Feed IDs follow the EVM `bytes4` convention (`0x` + 8 hex chars).
 
-The contract is a simple auction where you can place bids, view the highest bid, and claim the tokens at the end of the auction.
-
-This repo showcases the basic anatomy of a smart contract application on NEAR Protocol that showcases how to store data in a contract, how to update the state, and then how to read it.
-There are also unit tests, integration tests, and CI/CD pipelines preconfigured for your reference.
-
----
-
-## How to Build Locally?
-
-Install [`cargo-near`](https://github.com/near/cargo-near) and run:
+## Build
 
 ```bash
-cargo near build
+# dev build → target/near/multi_feed.wasm
+just build
+# reproducible build (Docker)
+just build-release
+# build + show wasm size
+just size
+# type-check only (fast)
+just check
 ```
 
-## How to Test Locally?
+## Test
 
 ```bash
-cargo test
+# unit + sandbox integration
+just test
+# unit tests only
+cargo test --lib
 ```
 
-## How to Deploy?
+## Read Interface
 
-Deployment is automated with GitHub Actions CI/CD pipeline.
-To deploy manually, install [`cargo-near`](https://github.com/near/cargo-near) and run:
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `fetch(feed_id)` | `Option<FeedData>` | Single feed by ID — `None` if absent |
+| `fetch_batch(feed_ids)` | `Vec<Option<FeedData>>` | Batch feed lookup — each element is `None` if absent |
+| `get_owner()` | `AccountId` | Contract owner |
+| `description()` | `String` | Human-readable contract description |
+| `decimals()` | `u8` | Price decimals |
+| `version()` | `u8` | Contract version |
+| `is_admin(account)` | `bool` | Check admin role |
+| `is_product(account)` | `bool` | Check product role |
+| `is_price_reporter(account)` | `bool` | Check price reporter role |
+| `is_authorized_caller(account)` | `bool` | Check authorized caller |
+| `is_paused()` | `bool` | Whether contract is paused |
+| `is_open_read()` | `bool` | Whether open-read is enabled |
+| `get_authorized_callers()` | `Vec<AccountId>` | All authorized callers |
 
-If you deploy for debugging purposes:
+## Read Modes
 
-```bash
-cargo near deploy build-non-reproducible-wasm
+Two read modes, controlled by the owner:
+
+- **Open read** (`is_open_read() == true`) — anyone can call `fetch` / `fetch_batch`. Set at init with `open_read_enabled: true`.
+- **Gated read** (`is_open_read() == false`) — only addresses in the authorized-caller whitelist can read. The whitelist is managed by products.
+
+Either mode is blocked when the contract is paused.
+
+## Feed Data
+
+What `fetch` and `fetch_batch` return. Each entry is the latest price for a feed ID.
+
+```json
+{
+  "price": "123456789012345678",
+  "agg_ts": 1700000000,
+  "onchain_ts": 1700000001
+}
 ```
 
-If you deploy production ready smart contract:
+| Field | Type | Description |
+|-------|------|-------------|
+| `price` | `u128` | Raw price value (18 decimal places) |
+| `agg_ts` | `u64` | Reporter's aggregated timestamp (seconds), strictly monotonic per feed |
+| `onchain_ts` | `u64` | Block timestamp at write time (seconds) |
 
-```bash
-cargo near deploy build-reproducible-wasm
-```
+## Borsh Input for `f`
 
-## Initialize the contract
+`f` is the batch feed entrypoint. It takes Borsh-encoded `Vec<FeedUpdate>` instead of JSON — Borsh costs far less gas to decode, and this gets called a lot.
 
-```bash
-# on Linux / Windows WSL
-TWO_MINUTES_FROM_NOW=$(date -d '+2 minutes' +%s000000000)
-# on MacOS
-TWO_MINUTES_FROM_NOW=$(date -v+2M +%s000000000)
+| Field | Type | Size |
+|-------|------|------|
+| `feed_id` | `u32` | 4 bytes |
+| `price` | `u128` | 16 bytes |
+| `agg_ts` | `u64` | 8 bytes |
 
-near contract call-function as-transaction '<CONTRACT_ACCOUNT_ID>' init json-args '{"end_time": "'$TWO_MINUTES_FROM_NOW'", "auctioneer": "<AUCTIONEER_ACCOUNT_ID>"}' prepaid-gas '30.0 Tgas' attached-deposit '0 NEAR'
-```
+## Feed ID Format
 
-## Useful Links
+`0x` + 8 case-insensitive hex digits. Example: `"0x0000002a"`.
 
-- [cargo-near](https://github.com/near/cargo-near) - NEAR smart contract development toolkit for Rust
-- [near CLI](https://near.cli.rs) - Interact with NEAR blockchain from command line
-- [NEAR Rust SDK Documentation](https://docs.near.org/sdk/rust/introduction)
-- [NEAR Documentation](https://docs.near.org)
-- [NEAR StackOverflow](https://stackoverflow.com/questions/tagged/nearprotocol)
-- [NEAR Discord](https://near.chat)
-- [NEAR Telegram Developers Community Group](https://t.me/neardev)
-- NEAR DevHub: [Telegram](https://t.me/neardevhub), [Twitter](https://twitter.com/neardevhub)
+## Storage
+
+To minimize on-chain storage gas, `FeedData` uses a custom Borsh serialization that packs each entry into 22 bytes instead of the native 36 bytes:
+
+| Field | Native | Packed | Truncation |
+|-------|--------|--------|------------|
+| `price` | 16 bytes | 10 bytes | Low 80 bits (covers up to ~1.2e24) |
+| `agg_ts` | 8 bytes | 6 bytes | Low 48 bits (covers ~8.9M years) |
+| `onchain_ts` | 8 bytes | 6 bytes | Low 48 bits |
+
+The discarded bytes are never needed — the remaining bits can already represent prices up to ~1.2e24 and timestamps spanning ~8.9 million years.
+
+## Access Control
+
+- **Owner**: full control — transfer ownership, manage roles, toggle open-read.
+- **Admin**: can pause / unpause.
+- **Product**: can manage the authorized-caller whitelist.
+- **Price Reporter**: can submit feeds via `f`.
+- **Authorized Caller**: can read when the contract is in gated-read mode.

@@ -407,7 +407,8 @@ impl MultiFeed {
 }
 
 // Parse a hex-encoded feed ID string (e.g. "0x0000002a") into a u32.
-// Reverts if the input is not prefixed with "0x" or is not exactly 8 hex digits.
+// Hex digits are case-insensitive, but the "0x" prefix must be lowercase
+// and the string must be exactly 8 hex digits; reverts otherwise.
 fn parse_feed_id(s: &str) -> u32 {
     require!(
         s.len() == FEED_ID_HEX_STR_LEN && s.starts_with("0x"),
