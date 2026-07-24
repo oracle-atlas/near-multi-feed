@@ -11,6 +11,12 @@ use types::{FeedData, FeedUpdate, Flags, RoleUpdate};
 const MAX_FUTURE_DRIFT_THRESHOLD: u64 = 60;
 // env::block_timestamp() returns nanoseconds; we work in seconds everywhere.
 const NANOS_PER_SEC: u64 = 1_000_000_000;
+// Number of decimals for price values.
+const DECIMALS: u8 = 18;
+// Contract version.
+const VERSION: u8 = 1;
+// A feed id string is "0x" + 8 hex chars = 10 chars total.
+const FEED_ID_HEX_STR_LEN: usize = 10;
 
 #[derive(BorshStorageKey)]
 #[near]
@@ -119,7 +125,6 @@ impl MultiFeed {
 
         // Compute block time in seconds; reused for timestamp validation and onchain_ts.
         let now = env::block_timestamp() / NANOS_PER_SEC;
-        let future_bound = now + MAX_FUTURE_DRIFT_THRESHOLD;
 
         let mut feed_ids = Vec::with_capacity(updates.len());
         let mut prices = Vec::with_capacity(updates.len());
@@ -128,13 +133,14 @@ impl MultiFeed {
         for u in updates {
             // Validate agg_ts is strictly newer than stored and within future drift.
             let prev_agg_ts = self.feeds.get(&u.feed_id).map(|f| f.agg_ts).unwrap_or(0);
-            require!(
-                u.agg_ts > prev_agg_ts && u.agg_ts < future_bound,
-                format!(
+
+            // Only build the (heap-allocating) diagnostic string on the failure path
+            if u.agg_ts <= prev_agg_ts || u.agg_ts >= now + MAX_FUTURE_DRIFT_THRESHOLD {
+                env::panic_str(&format!(
                     "Report timestamp out of bounds: feed_id={}, prev_agg_ts={}, now={}",
                     u.feed_id, prev_agg_ts, now
-                )
-            );
+                ));
+            }
 
             // Write feed entry; onchain_ts set by the contract.
             self.feeds.insert(
@@ -247,22 +253,17 @@ impl MultiFeed {
         );
         require!(!updates.is_empty(), "Empty updates array");
         for update in updates {
-            if update.status {
-                if self.authorized_callers.insert(update.account.clone()) {
-                    ContractEvent::AuthorizedCallerStatusChanged {
-                        account: update.account,
-                        status: true,
-                    }
-                    .emit();
-                }
+            let changed = if update.status {
+                self.authorized_callers.insert(update.account.clone())
             } else {
-                if self.authorized_callers.remove(&update.account) {
-                    ContractEvent::AuthorizedCallerStatusChanged {
-                        account: update.account,
-                        status: false,
-                    }
-                    .emit();
+                self.authorized_callers.remove(&update.account)
+            };
+            if changed {
+                ContractEvent::AuthorizedCallerStatusChanged {
+                    account: update.account,
+                    status: update.status,
                 }
+                .emit();
             }
         }
     }
@@ -342,12 +343,12 @@ impl MultiFeed {
 
     // Return the number of decimals for price values.
     pub fn decimals(&self) -> u8 {
-        18
+        DECIMALS
     }
 
     // Return the contract version.
     pub fn version(&self) -> u8 {
-        1
+        VERSION
     }
 
     // Return whether the given account holds the admin role.
@@ -365,6 +366,7 @@ impl MultiFeed {
         self.price_reporters.contains(&account)
     }
 
+    // Return whether the given account is in the authorized-caller whitelist.
     pub fn is_authorized_caller(&self, account: AccountId) -> bool {
         self.authorized_callers.contains(&account)
     }
@@ -408,7 +410,7 @@ impl MultiFeed {
 // Reverts if the input is not prefixed with "0x" or is not exactly 8 hex digits.
 fn parse_feed_id(s: &str) -> u32 {
     require!(
-        s.len() == 10 && s.starts_with("0x"),
+        s.len() == FEED_ID_HEX_STR_LEN && s.starts_with("0x"),
         "Feed id must be 0x followed by exactly 8 hex digits"
     );
     let Ok(v) = u32::from_str_radix(&s[2..], 16) else {
