@@ -33,3 +33,11 @@ size-only:
 # Remove build artifacts.
 clean:
     cargo clean
+
+# Run the consumer example's integration test (sandbox).
+test-consumer:
+    cd examples/consumer && cargo test --test integration
+
+# Build the consumer example contract.
+build-consumer:
+    cd examples/consumer && cargo near build non-reproducible-wasm
