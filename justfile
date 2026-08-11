@@ -41,3 +41,19 @@ test-consumer:
 # Build the consumer example contract.
 build-consumer:
     cd examples/consumer && cargo near build non-reproducible-wasm
+
+# Deploy the contract to a client (from deployments.toml).
+# Onboarding a new client:
+#   1. near account create-account fund-myself <client>.atlas-oracle.near autogenerate-new-keypair --accountId atlas-oracle.near
+#   2. Add [<client>] section to deployments.toml
+#   3. just build-release
+#   4. just deploy <client>
+# Usage: just deploy <client>
+deploy client:
+    cd scripts && cargo run --bin deploy -- --client {{client}}
+
+# Submit price feed data for a client.
+# Usage: just feed <account> <count>
+# Example: just feed multi-feed-qa-1.atlas-oracle.near 5
+feed account count:
+    cd scripts && cargo run --bin feed -- --account {{account}} --count {{count}}

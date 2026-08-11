@@ -1,0 +1,38 @@
+# Multi-Feed — project deployment registry
+#
+# atlas-oracle.near is the parent account used to create and fund
+# client sub-accounts. Contract deployments go to client accounts only.
+#
+# Each [<name>] entry maps a client alias to its sub-account.
+# Secrets (private key, RPC URL) are in ../.env — see .env.example.
+#
+# Usage:
+#   cargo run -- --client <name>                # deploy + init
+#   cargo run --bin feed -- --account <account> --count <count>  # submit feed data
+#
+# All fields are required. Use [] for empty lists.
+
+[qa-1]
+account = "multi-feed-qa-1.atlas-oracle.near"
+owner = "michael_wang.near"
+description = "MultiFeed"
+open_read_enabled = true
+admins = ["michael_wang.near"]
+products = ["michael_wang.near"]
+price_reporters = [
+    "michael_wang.near",
+    "284a8083be3591190b9f12ce75acf72f76ae889ed5c11b30e087b0f6e4b826a6",
+]
+authorized_callers = []
+
+# Add new clients below as you onboard them:
+#
+# [client-name]
+# account = "client-name.atlas-oracle.near"
+# owner = ""
+# description = "MultiFeed"
+# open_read_enabled = true
+# admins = []
+# products = []
+# price_reporters = []
+# authorized_callers = []
