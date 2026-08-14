@@ -1972,7 +1972,7 @@ mod tests {
     }
 
     mod f {
-        use super::{alice, assert_event_log, bob, owner, set_privileged_caller, set_context};
+        use super::{alice, assert_event_log, bob, owner, set_context, set_privileged_caller};
         use crate::types::FeedUpdate;
         use crate::{ContractEvent, MAX_FUTURE_DRIFT_THRESHOLD, MultiFeed};
         use near_sdk::test_utils::get_logs;

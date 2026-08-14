@@ -1,12 +1,14 @@
 use near_sdk::borsh::{BorshDeserialize, BorshSerialize};
+use near_sdk::serde_with::DisplayFromStr;
 use near_sdk::{AccountId, near};
 
 // Pack feed data as 22 raw bytes: price (10B) + agg_ts (6B) + onchain_ts (6B).
 // Custom Borsh stores exactly 22 bytes (no length prefix, no overhead);
-// JSON view exposes the decoded fields.
 #[near(serializers = [json])]
 #[derive(Clone)]
 pub struct FeedData {
+    // Serialize as a decimal string to prevent IEEE-754 precision loss in JSON consumers.
+    #[serde_as(as = "DisplayFromStr")]
     pub price: u128,
     pub agg_ts: u64,
     pub onchain_ts: u64,
@@ -287,6 +289,27 @@ mod tests {
                 assert!(f.is_paused());
                 assert_eq!(f.0, 2);
             }
+        }
+    }
+
+    mod feed_data {
+        use crate::types::FeedData;
+        use near_sdk::serde_json;
+
+        #[test]
+        fn price_serializes_as_string() {
+            // u128 values above 2^53-1 are silently truncated by IEEE-754 JSON parsers.
+            // Verify price is emitted as a decimal string, not a number.
+            let feed = FeedData {
+                price: u128::MAX,
+                agg_ts: 0,
+                onchain_ts: 0,
+            };
+            let json = serde_json::to_string(&feed).unwrap();
+            assert_eq!(
+                json,
+                r#"{"price":"340282366920938463463374607431768211455","agg_ts":0,"onchain_ts":0}"#
+            );
         }
     }
 }

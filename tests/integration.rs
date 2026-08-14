@@ -1,5 +1,5 @@
 use near_api::{AccountId, NearGas, NearToken};
-use near_sdk::serde_json::json;
+use near_sdk::{json_types::U128, serde_json::json};
 
 // Mirror of the contract's borsh `FeedUpdate` input (feed_id + price + agg_ts).
 #[derive(near_sdk::borsh::BorshSerialize)]
@@ -11,10 +11,11 @@ struct FeedUpdate {
 }
 
 // Mirror of the contract's JSON `FeedData` view (price + agg_ts + onchain_ts).
+// price is deserialized from a decimal string to avoid IEEE-754 precision loss.
 #[derive(near_sdk::serde::Deserialize, Debug)]
 #[serde(crate = "near_sdk::serde")]
 struct FeedData {
-    price: u128,
+    price: U128,
     agg_ts: u64,
     onchain_ts: u64,
 }
@@ -95,7 +96,7 @@ async fn test_basics_on(contract_wasm: Vec<u8>) -> testresult::TestResult<()> {
         .fetch_from(&sandbox_network)
         .await?
         .data;
-    assert_eq!(feed.price, 100);
+    assert_eq!(feed.price.0, 100);
     assert_eq!(feed.agg_ts, now - 1);
     assert!(feed.onchain_ts > 0);
 
@@ -110,9 +111,9 @@ async fn test_basics_on(contract_wasm: Vec<u8>) -> testresult::TestResult<()> {
         .await?
         .data;
     assert_eq!(feeds.len(), 3);
-    assert_eq!(feeds[0].as_ref().unwrap().price, 100);
+    assert_eq!(feeds[0].as_ref().unwrap().price.0, 100);
     assert_eq!(feeds[0].as_ref().unwrap().agg_ts, now - 1);
-    assert_eq!(feeds[1].as_ref().unwrap().price, 200);
+    assert_eq!(feeds[1].as_ref().unwrap().price.0, 200);
     assert_eq!(feeds[1].as_ref().unwrap().agg_ts, now - 1);
     assert!(feeds[2].is_none());
 
@@ -141,6 +142,7 @@ async fn test_basics_on(contract_wasm: Vec<u8>) -> testresult::TestResult<()> {
     contract
         .call_function("set_paused", json!({ "paused": true }))
         .transaction()
+        .deposit(NearToken::from_yoctonear(1))
         .gas(NearGas::from_tgas(30))
         .with_signer(admin.account_id().clone(), signer.clone())
         .send_to(&sandbox_network)
@@ -163,6 +165,7 @@ async fn test_basics_on(contract_wasm: Vec<u8>) -> testresult::TestResult<()> {
     tx_execution_err = contract
         .call_function("set_paused", json!({ "paused": false }))
         .transaction()
+        .deposit(NearToken::from_yoctonear(1))
         .gas(NearGas::from_tgas(30))
         .with_signer(outsider.account_id().clone(), signer.clone())
         .send_to(&sandbox_network)
@@ -177,6 +180,7 @@ async fn test_basics_on(contract_wasm: Vec<u8>) -> testresult::TestResult<()> {
     contract
         .call_function("set_paused", json!({ "paused": false }))
         .transaction()
+        .deposit(NearToken::from_yoctonear(1))
         .gas(NearGas::from_tgas(30))
         .with_signer(admin.account_id().clone(), signer.clone())
         .send_to(&sandbox_network)
@@ -190,6 +194,7 @@ async fn test_basics_on(contract_wasm: Vec<u8>) -> testresult::TestResult<()> {
             json!({ "updates": [{ "account": outsider.account_id(), "status": true }] }),
         )
         .transaction()
+        .deposit(NearToken::from_yoctonear(1))
         .gas(NearGas::from_tgas(30))
         .with_signer(owner.account_id().clone(), signer.clone())
         .send_to(&sandbox_network)
@@ -219,7 +224,7 @@ async fn test_basics_on(contract_wasm: Vec<u8>) -> testresult::TestResult<()> {
         .fetch_from(&sandbox_network)
         .await?
         .data;
-    assert_eq!(feed.price, 300);
+    assert_eq!(feed.price.0, 300);
 
     // A stale agg_ts (not strictly newer than stored) is rejected.
     tx_execution_err = contract
