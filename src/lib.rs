@@ -2,7 +2,7 @@ mod events;
 mod types;
 
 use near_sdk::store::{IterableSet, LookupMap, LookupSet};
-use near_sdk::{AccountId, BorshStorageKey, PanicOnDefault, env, near, require};
+use near_sdk::{AccountId, BorshStorageKey, PanicOnDefault, assert_one_yocto, env, near, require};
 
 use events::ContractEvent;
 use types::{FeedData, FeedUpdate, Flags, RoleUpdate};
@@ -168,7 +168,9 @@ impl MultiFeed {
 
     // Transfer ownership to a new account. Only callable by the current owner.
     // Reverts if the new owner is the same as the current one.
+    #[payable]
     pub fn transfer_ownership(&mut self, new_owner: AccountId) {
+        assert_one_yocto();
         require!(
             env::predecessor_account_id() == self.owner,
             "Only the owner can call"
@@ -190,7 +192,9 @@ impl MultiFeed {
 
     // Update admin role memberships. Only callable by the owner.
     // Reverts on empty input or if any update is redundant.
+    #[payable]
     pub fn set_admins(&mut self, updates: Vec<RoleUpdate>) {
+        assert_one_yocto();
         require!(
             env::predecessor_account_id() == self.owner,
             "Only the owner can call"
@@ -208,7 +212,9 @@ impl MultiFeed {
 
     // Update product role memberships. Only callable by the owner.
     // Reverts on empty input or if any update is redundant.
+    #[payable]
     pub fn set_products(&mut self, updates: Vec<RoleUpdate>) {
+        assert_one_yocto();
         require!(
             env::predecessor_account_id() == self.owner,
             "Only the owner can call"
@@ -226,7 +232,9 @@ impl MultiFeed {
 
     // Update price-reporter role memberships. Only callable by the owner.
     // Reverts on empty input or if any update is redundant.
+    #[payable]
     pub fn set_price_reporters(&mut self, updates: Vec<RoleUpdate>) {
+        assert_one_yocto();
         require!(
             env::predecessor_account_id() == self.owner,
             "Only the owner can call"
@@ -246,7 +254,9 @@ impl MultiFeed {
     // Silently skips accounts already in the desired state (no revert on duplicates).
     // Callable even in open-read mode to pre-configure callers before
     // switching to gated reads.
+    #[payable]
     pub fn set_authorized_callers(&mut self, updates: Vec<RoleUpdate>) {
+        assert_one_yocto();
         require!(
             self.products.contains(&env::predecessor_account_id()),
             "Only a product can call"
@@ -270,7 +280,9 @@ impl MultiFeed {
 
     // Set the contract paused state. Only callable by an admin.
     // Reverts if the contract is already in the target state.
+    #[payable]
     pub fn set_paused(&mut self, paused: bool) {
+        assert_one_yocto();
         require!(
             self.admin.contains(&env::predecessor_account_id()),
             "Only an admin can call"
@@ -282,7 +294,9 @@ impl MultiFeed {
 
     // Set the open-read flag. Only callable by the owner.
     // Reverts if the flag is already in the target state.
+    #[payable]
     pub fn set_open_read_status(&mut self, status: bool) {
+        assert_one_yocto();
         require!(
             env::predecessor_account_id() == self.owner,
             "Only the owner can call"
@@ -457,7 +471,7 @@ fn init_lookup_set_role(
 #[cfg(test)]
 mod tests {
     use crate::{ContractEvent, MultiFeed, types::FeedUpdate};
-    use near_sdk::{AccountId, serde_json, testing_env};
+    use near_sdk::{AccountId, NearToken, serde_json, testing_env};
 
     fn alice() -> AccountId {
         "alice.near".parse().unwrap()
@@ -471,10 +485,13 @@ mod tests {
         "owner.near".parse().unwrap()
     }
 
-    fn set_caller(account: AccountId) {
+    // Set up test context with 1 yoctoNEAR deposit — required by #[payable]
+    // privileged functions to block Function-Call Access Key attacks.
+    fn set_privileged_caller(account: AccountId) {
         testing_env!(
             near_sdk::test_utils::VMContextBuilder::new()
                 .predecessor_account_id(account)
+                .attached_deposit(NearToken::from_yoctonear(1))
                 .build()
         );
     }
@@ -1030,14 +1047,14 @@ mod tests {
 
     mod transfer_ownership {
         use super::init_contract;
-        use super::{alice, assert_event_log, owner, set_caller};
+        use super::{alice, assert_event_log, owner, set_privileged_caller};
         use crate::ContractEvent;
         use near_sdk::test_utils::get_logs;
 
         #[test]
         fn transfer() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.transfer_ownership(alice());
             assert_eq!(contract.get_owner(), alice());
 
@@ -1055,7 +1072,7 @@ mod tests {
         #[should_panic(expected = "Only the owner can call")]
         fn non_owner_cannot_transfer() {
             let mut contract = init_contract();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.transfer_ownership(alice());
         }
 
@@ -1063,7 +1080,7 @@ mod tests {
         #[should_panic(expected = "New owner must differ from the current owner")]
         fn same_owner() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.transfer_ownership(owner());
         }
 
@@ -1072,10 +1089,10 @@ mod tests {
         fn old_owner_loses_power_after_transfer() {
             use super::bob;
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.transfer_ownership(alice());
 
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_admins(vec![crate::RoleUpdate {
                 account: bob(),
                 status: true,
@@ -1086,10 +1103,10 @@ mod tests {
         fn new_owner_gains_power_after_transfer() {
             use super::bob;
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.transfer_ownership(alice());
 
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_admins(vec![crate::RoleUpdate {
                 account: bob(),
                 status: true,
@@ -1099,14 +1116,14 @@ mod tests {
     }
 
     mod set_admins {
-        use super::{alice, assert_event_log, bob, init_contract, owner, set_caller};
+        use super::{alice, assert_event_log, bob, init_contract, owner, set_privileged_caller};
         use crate::{ContractEvent, RoleUpdate};
         use near_sdk::test_utils::get_logs;
 
         #[test]
         fn add() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_admins(vec![RoleUpdate {
                 account: alice(),
                 status: true,
@@ -1125,7 +1142,7 @@ mod tests {
         #[test]
         fn batch_add() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_admins(vec![
                 RoleUpdate {
                     account: alice(),
@@ -1158,7 +1175,7 @@ mod tests {
         #[test]
         fn remove() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_admins(vec![RoleUpdate {
                 account: alice(),
                 status: true,
@@ -1181,7 +1198,7 @@ mod tests {
         #[test]
         fn batch_remove() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             // Add both first.
             contract.set_admins(vec![
                 RoleUpdate {
@@ -1227,7 +1244,7 @@ mod tests {
         #[should_panic(expected = "Only the owner can call")]
         fn non_owner() {
             let mut contract = init_contract();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_admins(vec![RoleUpdate {
                 account: bob(),
                 status: true,
@@ -1238,7 +1255,7 @@ mod tests {
         #[should_panic(expected = "Empty updates array")]
         fn empty_updates() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_admins(vec![]);
         }
 
@@ -1246,7 +1263,7 @@ mod tests {
         #[should_panic(expected = "Already in role")]
         fn duplicate_add() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_admins(vec![RoleUpdate {
                 account: alice(),
                 status: true,
@@ -1261,7 +1278,7 @@ mod tests {
         #[should_panic(expected = "Not in role")]
         fn remove_not_in_role() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_admins(vec![RoleUpdate {
                 account: alice(),
                 status: false,
@@ -1271,14 +1288,14 @@ mod tests {
 
     mod set_products {
         use super::init_contract;
-        use super::{alice, assert_event_log, bob, owner, set_caller};
+        use super::{alice, assert_event_log, bob, owner, set_privileged_caller};
         use crate::{ContractEvent, RoleUpdate};
         use near_sdk::test_utils::get_logs;
 
         #[test]
         fn add() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_products(vec![RoleUpdate {
                 account: bob(),
                 status: true,
@@ -1297,7 +1314,7 @@ mod tests {
         #[test]
         fn remove() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_products(vec![RoleUpdate {
                 account: bob(),
                 status: true,
@@ -1321,7 +1338,7 @@ mod tests {
         #[should_panic(expected = "Only the owner can call")]
         fn non_owner() {
             let mut contract = init_contract();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_products(vec![RoleUpdate {
                 account: bob(),
                 status: true,
@@ -1332,7 +1349,7 @@ mod tests {
         #[should_panic(expected = "Empty updates array")]
         fn empty_updates() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_products(vec![]);
         }
 
@@ -1340,7 +1357,7 @@ mod tests {
         #[should_panic(expected = "Already in role")]
         fn duplicate_add() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_products(vec![RoleUpdate {
                 account: bob(),
                 status: true,
@@ -1354,7 +1371,7 @@ mod tests {
         #[test]
         fn batch_add() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_products(vec![
                 RoleUpdate {
                     account: alice(),
@@ -1388,7 +1405,7 @@ mod tests {
         #[should_panic(expected = "Not in role")]
         fn remove_not_in_role() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_products(vec![RoleUpdate {
                 account: alice(),
                 status: false,
@@ -1398,7 +1415,7 @@ mod tests {
         #[test]
         fn batch_remove() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_products(vec![
                 RoleUpdate {
                     account: alice(),
@@ -1441,14 +1458,14 @@ mod tests {
 
     mod set_price_reporters {
         use super::init_contract;
-        use super::{alice, assert_event_log, bob, owner, set_caller};
+        use super::{alice, assert_event_log, bob, owner, set_privileged_caller};
         use crate::{ContractEvent, RoleUpdate};
         use near_sdk::test_utils::get_logs;
 
         #[test]
         fn add() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_price_reporters(vec![RoleUpdate {
                 account: alice(),
                 status: true,
@@ -1467,7 +1484,7 @@ mod tests {
         #[test]
         fn remove() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_price_reporters(vec![RoleUpdate {
                 account: alice(),
                 status: true,
@@ -1491,7 +1508,7 @@ mod tests {
         #[should_panic(expected = "Only the owner can call")]
         fn non_owner() {
             let mut contract = init_contract();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_price_reporters(vec![RoleUpdate {
                 account: alice(),
                 status: true,
@@ -1502,7 +1519,7 @@ mod tests {
         #[should_panic(expected = "Empty updates array")]
         fn empty_updates() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_price_reporters(vec![]);
         }
 
@@ -1510,7 +1527,7 @@ mod tests {
         #[should_panic(expected = "Already in role")]
         fn duplicate_add() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_price_reporters(vec![RoleUpdate {
                 account: alice(),
                 status: true,
@@ -1524,7 +1541,7 @@ mod tests {
         #[test]
         fn batch_add() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_price_reporters(vec![
                 RoleUpdate {
                     account: alice(),
@@ -1558,7 +1575,7 @@ mod tests {
         #[should_panic(expected = "Not in role")]
         fn remove_not_in_role() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_price_reporters(vec![RoleUpdate {
                 account: alice(),
                 status: false,
@@ -1568,7 +1585,7 @@ mod tests {
         #[test]
         fn batch_remove() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_price_reporters(vec![
                 RoleUpdate {
                     account: alice(),
@@ -1610,7 +1627,7 @@ mod tests {
     }
 
     mod set_authorized_callers {
-        use super::{alice, assert_event_log, bob, owner, set_caller};
+        use super::{alice, assert_event_log, bob, owner, set_privileged_caller};
         use crate::{ContractEvent, MultiFeed, RoleUpdate};
         use near_sdk::test_utils::get_logs;
 
@@ -1629,7 +1646,7 @@ mod tests {
         #[test]
         fn add() {
             let mut contract = init_contract_with_product();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_authorized_callers(vec![RoleUpdate {
                 account: bob(),
                 status: true,
@@ -1651,7 +1668,7 @@ mod tests {
         #[test]
         fn remove() {
             let mut contract = init_contract_with_product();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_authorized_callers(vec![RoleUpdate {
                 account: bob(),
                 status: true,
@@ -1677,7 +1694,7 @@ mod tests {
         #[should_panic(expected = "Only a product can call")]
         fn non_product() {
             let mut contract = init_contract_with_product();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_authorized_callers(vec![RoleUpdate {
                 account: bob(),
                 status: true,
@@ -1688,14 +1705,14 @@ mod tests {
         #[should_panic(expected = "Empty updates array")]
         fn empty_updates() {
             let mut contract = init_contract_with_product();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_authorized_callers(vec![]);
         }
 
         #[test]
         fn duplicate_add_skipped() {
             let mut contract = init_contract_with_product();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_authorized_callers(vec![RoleUpdate {
                 account: bob(),
                 status: true,
@@ -1715,7 +1732,7 @@ mod tests {
         #[test]
         fn remove_not_in_role_skipped() {
             let mut contract = init_contract_with_product();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_authorized_callers(vec![RoleUpdate {
                 account: bob(),
                 status: false,
@@ -1729,7 +1746,7 @@ mod tests {
         #[test]
         fn batch_add() {
             let mut contract = init_contract_with_product();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_authorized_callers(vec![
                 RoleUpdate {
                     account: alice(),
@@ -1766,7 +1783,7 @@ mod tests {
         #[test]
         fn batch_remove() {
             let mut contract = init_contract_with_product();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_authorized_callers(vec![
                 RoleUpdate {
                     account: alice(),
@@ -1812,13 +1829,13 @@ mod tests {
         #[should_panic(expected = "Only a product can call")]
         fn removed_product_cannot_set_authorized_callers() {
             let mut contract = init_contract_with_product();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_products(vec![RoleUpdate {
                 account: alice(),
                 status: false,
             }]);
 
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_authorized_callers(vec![RoleUpdate {
                 account: bob(),
                 status: true,
@@ -1827,7 +1844,7 @@ mod tests {
     }
 
     mod set_paused {
-        use super::{alice, assert_event_log, bob, owner, set_caller};
+        use super::{alice, assert_event_log, bob, owner, set_privileged_caller};
         use crate::{ContractEvent, MultiFeed};
         use near_sdk::test_utils::get_logs;
 
@@ -1846,7 +1863,7 @@ mod tests {
         #[test]
         fn pause() {
             let mut contract = init_contract_with_admin();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_paused(true);
             assert!(contract.is_paused());
             let logs = get_logs();
@@ -1859,7 +1876,7 @@ mod tests {
         #[test]
         fn unpause() {
             let mut contract = init_contract_with_admin();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_paused(true);
             contract.set_paused(false);
             assert!(!contract.is_paused());
@@ -1874,7 +1891,7 @@ mod tests {
         #[should_panic(expected = "Only an admin can call")]
         fn non_admin_cannot_pause() {
             let mut contract = init_contract_with_admin();
-            set_caller(bob());
+            set_privileged_caller(bob());
             contract.set_paused(true);
         }
 
@@ -1882,7 +1899,7 @@ mod tests {
         #[should_panic(expected = "Already in target state")]
         fn already_paused() {
             let mut contract = init_contract_with_admin();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_paused(true);
             contract.set_paused(true);
         }
@@ -1891,20 +1908,20 @@ mod tests {
         #[should_panic(expected = "Already in target state")]
         fn already_unpaused() {
             let mut contract = init_contract_with_admin();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_paused(false);
         }
     }
 
     mod set_open_read_status {
-        use super::{alice, assert_event_log, init_contract, owner, set_caller};
+        use super::{alice, assert_event_log, init_contract, owner, set_privileged_caller};
         use crate::ContractEvent;
         use near_sdk::test_utils::get_logs;
 
         #[test]
         fn enable() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_open_read_status(true);
             assert!(contract.is_open_read());
             let logs = get_logs();
@@ -1917,7 +1934,7 @@ mod tests {
         #[test]
         fn disable() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_open_read_status(true);
             contract.set_open_read_status(false);
             assert!(!contract.is_open_read());
@@ -1932,7 +1949,7 @@ mod tests {
         #[should_panic(expected = "Only the owner can call")]
         fn non_owner_cannot_set() {
             let mut contract = init_contract();
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_open_read_status(true);
         }
 
@@ -1940,7 +1957,7 @@ mod tests {
         #[should_panic(expected = "Already in target state")]
         fn already_enabled() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_open_read_status(true);
             contract.set_open_read_status(true);
         }
@@ -1949,13 +1966,13 @@ mod tests {
         #[should_panic(expected = "Already in target state")]
         fn already_disabled() {
             let mut contract = init_contract();
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_open_read_status(false);
         }
     }
 
     mod f {
-        use super::{alice, assert_event_log, bob, owner, set_context};
+        use super::{alice, assert_event_log, bob, owner, set_privileged_caller, set_context};
         use crate::types::FeedUpdate;
         use crate::{ContractEvent, MAX_FUTURE_DRIFT_THRESHOLD, MultiFeed};
         use near_sdk::test_utils::get_logs;
@@ -2232,7 +2249,7 @@ mod tests {
         #[should_panic(expected = "Only a price reporter can call")]
         fn removed_reporter_cannot_feed() {
             let mut contract = init_contract_with_reporter();
-            set_context(owner(), NOW);
+            set_privileged_caller(owner());
             contract.set_price_reporters(vec![crate::RoleUpdate {
                 account: alice(),
                 status: false,
@@ -2248,7 +2265,7 @@ mod tests {
     }
 
     mod fetch {
-        use super::{alice, bob, owner, set_caller};
+        use super::{alice, bob, owner, set_privileged_caller};
         use crate::MultiFeed;
         use crate::tests::{init_gated_with_roles, seed};
         use crate::types::RoleUpdate;
@@ -2271,7 +2288,7 @@ mod tests {
         fn authorized_caller_can_read_both() {
             let mut contract = init_gated_with_roles();
             seed(&mut contract, NOW);
-            set_caller(alice());
+            set_privileged_caller(alice());
 
             // fetch
             assert_eq!(contract.fetch("0x00000001".to_string()).unwrap().price, 100);
@@ -2289,13 +2306,13 @@ mod tests {
             let mut contract = init_gated_with_product();
             seed(&mut contract, NOW);
 
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_authorized_callers(vec![RoleUpdate {
                 account: bob(),
                 status: true,
             }]);
 
-            set_caller(bob());
+            set_privileged_caller(bob());
             assert_eq!(contract.fetch("0x00000001".to_string()).unwrap().price, 100);
             assert_eq!(contract.fetch("0x00000002".to_string()).unwrap().price, 200);
             let feeds =
@@ -2309,7 +2326,7 @@ mod tests {
         fn non_authorized_caller_cannot_fetch() {
             let mut contract = init_gated_with_roles();
             seed(&mut contract, NOW);
-            set_caller(bob());
+            set_privileged_caller(bob());
             contract.fetch("0x00000001".to_string());
         }
 
@@ -2318,7 +2335,7 @@ mod tests {
         fn non_authorized_caller_cannot_fetch_batch() {
             let mut contract = init_gated_with_roles();
             seed(&mut contract, NOW);
-            set_caller(bob());
+            set_privileged_caller(bob());
             contract.fetch_batch(vec!["0x00000001".to_string()]);
         }
 
@@ -2329,7 +2346,7 @@ mod tests {
         fn access_checked_before_lookup_on_missing_feed() {
             let contract = init_gated_with_roles();
             // No seed → feed absent; access control must still reject first
-            set_caller(bob());
+            set_privileged_caller(bob());
             contract.fetch("0x00000009".to_string());
         }
 
@@ -2338,7 +2355,7 @@ mod tests {
         fn revoked_caller_cannot_fetch() {
             let mut contract = init_gated_with_product();
             seed(&mut contract, NOW);
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_authorized_callers(vec![RoleUpdate {
                 account: bob(),
                 status: true,
@@ -2347,7 +2364,7 @@ mod tests {
                 account: bob(),
                 status: false,
             }]);
-            set_caller(bob());
+            set_privileged_caller(bob());
             contract.fetch("0x00000001".to_string());
         }
 
@@ -2356,11 +2373,11 @@ mod tests {
         fn paused_blocks_authorized_caller_fetch() {
             let mut contract = init_gated_with_roles();
             seed(&mut contract, NOW);
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_paused(true);
 
             // Alice is authorized, but paused takes precedence
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.fetch("0x00000001".to_string());
         }
 
@@ -2369,11 +2386,11 @@ mod tests {
         fn paused_blocks_authorized_caller_fetch_batch() {
             let mut contract = init_gated_with_roles();
             seed(&mut contract, NOW);
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_paused(true);
 
             // Alice is authorized, but paused takes precedence
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.fetch_batch(vec!["0x00000001".to_string()]);
         }
 
@@ -2381,7 +2398,7 @@ mod tests {
         fn fetch_missing_feed_returns_none() {
             let mut contract = init_gated_with_roles();
             seed(&mut contract, NOW);
-            set_caller(alice());
+            set_privileged_caller(alice());
             assert!(contract.fetch("0x00000009".to_string()).is_none());
         }
 
@@ -2390,14 +2407,14 @@ mod tests {
         fn fetch_rejects_malformed_id() {
             let mut contract = init_gated_with_roles();
             seed(&mut contract, NOW);
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.fetch("bad".to_string());
         }
     }
 
     // fetch_batch-specific semantics (fetch can't cover these).
     mod fetch_batch {
-        use super::{alice, init_gated_with_roles, seed, set_caller};
+        use super::{alice, init_gated_with_roles, seed, set_privileged_caller};
 
         const NOW: u64 = 1_000_000;
 
@@ -2406,7 +2423,7 @@ mod tests {
         fn preserves_order_and_missing() {
             let mut contract = init_gated_with_roles();
             seed(&mut contract, NOW);
-            set_caller(alice());
+            set_privileged_caller(alice());
             let feeds = contract.fetch_batch(vec![
                 "0x00000003".to_string(), // absent
                 "0x00000001".to_string(), // present → 100
@@ -2424,7 +2441,7 @@ mod tests {
         fn empty_input() {
             let mut contract = init_gated_with_roles();
             seed(&mut contract, NOW);
-            set_caller(alice());
+            set_privileged_caller(alice());
             let feeds = contract.fetch_batch(vec![]);
             assert!(feeds.is_empty());
         }
@@ -2434,7 +2451,7 @@ mod tests {
         fn rejects_malformed_id() {
             let mut contract = init_gated_with_roles();
             seed(&mut contract, NOW);
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.fetch_batch(vec![
                 "0x00000001".to_string(),
                 "bad".to_string(), // malformed
@@ -2444,7 +2461,7 @@ mod tests {
 
     // Open-read mode: reads are permissionless (any caller), but paused still blocks.
     mod open_read {
-        use super::{alice, bob, owner, seed, set_caller};
+        use super::{alice, bob, owner, seed, set_privileged_caller};
         use crate::{MultiFeed, tests::init_gated_with_roles};
 
         const NOW: u64 = 1_000_000;
@@ -2466,7 +2483,7 @@ mod tests {
             let mut contract = init_open_read_with_roles();
             seed(&mut contract, NOW);
             // Bob has no role and is not whitelisted
-            set_caller(bob());
+            set_privileged_caller(bob());
             assert_eq!(contract.fetch("0x00000001".to_string()).unwrap().price, 100);
             let feeds =
                 contract.fetch_batch(vec!["0x00000001".to_string(), "0x00000002".to_string()]);
@@ -2478,7 +2495,7 @@ mod tests {
         fn any_caller_missing_feed_returns_none() {
             let mut contract = init_open_read_with_roles();
             seed(&mut contract, NOW);
-            set_caller(bob());
+            set_privileged_caller(bob());
             assert!(contract.fetch("0x00000009".to_string()).is_none());
             let feeds = contract.fetch_batch(vec!["0x00000009".to_string()]);
             assert!(feeds[0].is_none());
@@ -2489,11 +2506,11 @@ mod tests {
         fn paused_blocks_even_in_open_read() {
             let mut contract = init_open_read_with_roles();
             seed(&mut contract, NOW);
-            set_caller(alice());
+            set_privileged_caller(alice());
             contract.set_paused(true);
 
             // Open-read would allow, but paused wins
-            set_caller(bob());
+            set_privileged_caller(bob());
             contract.fetch("0x00000001".to_string());
         }
 
@@ -2501,9 +2518,9 @@ mod tests {
         fn enabling_open_read_grants_access() {
             let mut contract = init_gated_with_roles();
             seed(&mut contract, NOW);
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_open_read_status(true); // Gated → Open
-            set_caller(bob()); // Previously denied
+            set_privileged_caller(bob()); // Previously denied
             assert_eq!(contract.fetch("0x00000001".to_string()).unwrap().price, 100);
         }
 
@@ -2512,9 +2529,9 @@ mod tests {
         fn disabling_open_read_revokes_access() {
             let mut contract = init_open_read_with_roles();
             seed(&mut contract, NOW);
-            set_caller(owner());
+            set_privileged_caller(owner());
             contract.set_open_read_status(false); // Open → Gated
-            set_caller(bob()); // Now not whitelisted → denied
+            set_privileged_caller(bob()); // Now not whitelisted → denied
             contract.fetch("0x00000001".to_string());
         }
     }
