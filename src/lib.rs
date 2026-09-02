@@ -1,11 +1,15 @@
 mod events;
 mod types;
 
-use near_sdk::store::{IterableSet, LookupMap, LookupSet};
-use near_sdk::{AccountId, BorshStorageKey, PanicOnDefault, assert_one_yocto, env, near, require};
-
 use events::ContractEvent;
-use types::{FeedData, FeedUpdate, Flags, RoleUpdate};
+use near_sdk::{
+    AccountId, BorshStorageKey, PanicOnDefault, assert_one_yocto, env,
+    json_types::U128,
+    near, require,
+    store::{IterableSet, LookupMap, LookupSet},
+};
+pub use types::{FeedData, FeedUpdate};
+use types::{Flags, RoleUpdate, StoredFeed};
 
 // Max allowed drift into the future for a reported aggregated timestamp (seconds).
 const MAX_FUTURE_DRIFT_THRESHOLD: u64 = 60;
@@ -31,7 +35,7 @@ enum StorageKey {
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct MultiFeed {
-    feeds: LookupMap<u32, FeedData>,
+    feeds: LookupMap<u32, StoredFeed>,
     flags: Flags,
     owner: AccountId,
     description: String,
@@ -145,7 +149,7 @@ impl MultiFeed {
             // Write feed entry; onchain_ts set by the contract.
             self.feeds.insert(
                 u.feed_id,
-                FeedData {
+                StoredFeed {
                     price: u.price,
                     agg_ts: u.agg_ts,
                     onchain_ts: now,
@@ -153,7 +157,7 @@ impl MultiFeed {
             );
 
             feed_ids.push(u.feed_id);
-            prices.push(u.price);
+            prices.push(U128(u.price));
             agg_ts.push(u.agg_ts);
         }
 
@@ -320,9 +324,10 @@ impl MultiFeed {
     //
     // # Returns
     // `Some(feed)` if the feed exists; `None` if absent.
+    #[result_serializer(borsh)]
     pub fn fetch(&self, feed_id: String) -> Option<FeedData> {
         self.only_read_access();
-        self.feeds.get(&parse_feed_id(&feed_id)).cloned()
+        self.feeds.get(&parse_feed_id(&feed_id)).map(FeedData::from)
     }
 
     // Return feeds for a batch of feed IDs, gated by read-access control.
@@ -337,11 +342,12 @@ impl MultiFeed {
     // # Returns
     // A vector of the same length; each element is `Some(feed)` if the
     // feed exists, `None` if absent.
+    #[result_serializer(borsh)]
     pub fn fetch_batch(&self, feed_ids: Vec<String>) -> Vec<Option<FeedData>> {
         self.only_read_access();
         feed_ids
             .iter()
-            .map(|id| self.feeds.get(&parse_feed_id(id)).cloned())
+            .map(|id| self.feeds.get(&parse_feed_id(id)).map(FeedData::from))
             .collect()
     }
 
@@ -1975,6 +1981,7 @@ mod tests {
         use super::{alice, assert_event_log, bob, owner, set_context, set_privileged_caller};
         use crate::types::FeedUpdate;
         use crate::{ContractEvent, MAX_FUTURE_DRIFT_THRESHOLD, MultiFeed};
+        use near_sdk::json_types::U128;
         use near_sdk::test_utils::get_logs;
 
         fn init_contract_with_reporter() -> MultiFeed {
@@ -2005,7 +2012,7 @@ mod tests {
                 &logs[0],
                 ContractEvent::F {
                     feed_ids: vec![42],
-                    prices: vec![1234],
+                    prices: vec![U128(1234)],
                     agg_ts: vec![NOW - 1],
                 },
             );
@@ -2042,7 +2049,7 @@ mod tests {
                 &logs[0],
                 ContractEvent::F {
                     feed_ids: vec![1, 2, 3],
-                    prices: vec![100, 200, 300],
+                    prices: vec![U128(100), U128(200), U128(300)],
                     agg_ts: vec![NOW - 10, NOW - 5, NOW - 1],
                 },
             );

@@ -1,20 +1,21 @@
-use near_sdk::borsh::{BorshDeserialize, BorshSerialize};
-use near_sdk::serde_with::DisplayFromStr;
-use near_sdk::{AccountId, near};
+use near_sdk::{
+    AccountId,
+    borsh::{BorshDeserialize, BorshSerialize},
+    near,
+};
 
-// Pack feed data as 22 raw bytes: price (10B) + agg_ts (6B) + onchain_ts (6B).
-// Custom Borsh stores exactly 22 bytes (no length prefix, no overhead);
-#[near(serializers = [json])]
-#[derive(Clone)]
-pub struct FeedData {
-    // Serialize as a decimal string to prevent IEEE-754 precision loss in JSON consumers.
-    #[serde_as(as = "DisplayFromStr")]
+// Internal storage format: pack a feed into 22 raw bytes — price (10B) +
+// agg_ts (6B) + onchain_ts (6B), big-endian with no length prefix or
+// padding, 10 bytes below the standard full-width encoding. Minimizing
+// stored bytes directly minimizes the NEAR locked by per-byte storage
+// staking. Not part of the contract ABI.
+pub struct StoredFeed {
     pub price: u128,
     pub agg_ts: u64,
     pub onchain_ts: u64,
 }
 
-impl BorshSerialize for FeedData {
+impl BorshSerialize for StoredFeed {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
         // Write price: u128 → 16B big-endian, emit low 10 bytes.
         writer.write_all(&self.price.to_be_bytes()[6..16])?;
@@ -26,7 +27,7 @@ impl BorshSerialize for FeedData {
     }
 }
 
-impl BorshDeserialize for FeedData {
+impl BorshDeserialize for StoredFeed {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         // Read price: 10 bytes into low portion of a zeroed [u8; 16].
         let mut price_buf = [0u8; 16];
@@ -45,6 +46,26 @@ impl BorshDeserialize for FeedData {
             agg_ts,
             onchain_ts,
         })
+    }
+}
+
+// Returned by `fetch`/`fetch_batch`, encoded as standard Borsh
+// (little-endian, full-width fields), so consumers decode with any
+// Borsh library rather than the custom 22-byte storage codec.
+#[near(serializers = [borsh])]
+pub struct FeedData {
+    pub price: u128,
+    pub agg_ts: u64,
+    pub onchain_ts: u64,
+}
+
+impl From<&StoredFeed> for FeedData {
+    fn from(sf: &StoredFeed) -> Self {
+        Self {
+            price: sf.price,
+            agg_ts: sf.agg_ts,
+            onchain_ts: sf.onchain_ts,
+        }
     }
 }
 
@@ -292,24 +313,59 @@ mod tests {
         }
     }
 
-    mod feed_data {
-        use crate::types::FeedData;
-        use near_sdk::serde_json;
+    mod stored_feed {
+        use crate::types::StoredFeed;
+        use near_sdk::borsh::{self, BorshDeserialize};
 
         #[test]
-        fn price_serializes_as_string() {
-            // u128 values above 2^53-1 are silently truncated by IEEE-754 JSON parsers.
-            // Verify price is emitted as a decimal string, not a number.
-            let feed = FeedData {
-                price: u128::MAX,
+        fn round_trips_22_byte_codec() {
+            // Verify the custom storage codec round-trips the field-wise maxima;
+            // price is truncated to 10B and timestamps to 6B, both big-endian.
+            let stored = StoredFeed {
+                price: (1u128 << 80) - 1,
+                agg_ts: (1u64 << 48) - 1,
+                onchain_ts: (1u64 << 48) - 1,
+            };
+            let bytes = borsh::to_vec(&stored).unwrap();
+            assert_eq!(bytes.len(), 22);
+            let decoded = StoredFeed::try_from_slice(&bytes).unwrap();
+            assert_eq!(decoded.price, stored.price);
+            assert_eq!(decoded.agg_ts, stored.agg_ts);
+            assert_eq!(decoded.onchain_ts, stored.onchain_ts);
+        }
+
+        #[test]
+        fn byte_layout_is_pinned() {
+            // Pin the exact 22-byte storage layout (price, then agg_ts,
+            // then onchain_ts, each big-endian) so accidental format drift
+            // breaks loudly — stored state must stay decodable across
+            // contract upgrades.
+            let stored = StoredFeed {
+                price: 0x0102030405060708090A,
+                agg_ts: 0x010203040506,
+                onchain_ts: 0x010203040506,
+            };
+            let bytes = borsh::to_vec(&stored).unwrap();
+            let expected: [u8; 22] = [
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x01, 0x02, 0x03, 0x04,
+                0x05, 0x06, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
+            ];
+            assert_eq!(bytes, expected);
+        }
+
+        #[test]
+        fn drops_price_bits_above_80() {
+            // Document the codec's truncation semantics: only the low 80
+            // price bits survive a round trip — inputs at or above 2^80 are
+            // silently corrupted unless bounded upstream.
+            let stored = StoredFeed {
+                price: (1u128 << 80) + 0x1234,
                 agg_ts: 0,
                 onchain_ts: 0,
             };
-            let json = serde_json::to_string(&feed).unwrap();
-            assert_eq!(
-                json,
-                r#"{"price":"340282366920938463463374607431768211455","agg_ts":0,"onchain_ts":0}"#
-            );
+            let bytes = borsh::to_vec(&stored).unwrap();
+            let decoded = StoredFeed::try_from_slice(&bytes).unwrap();
+            assert_eq!(decoded.price, 0x1234);
         }
     }
 }

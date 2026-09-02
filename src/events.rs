@@ -1,4 +1,4 @@
-use near_sdk::{AccountId, near};
+use near_sdk::{AccountId, json_types::U128, near};
 
 #[near(event_json(standard = "multi-feed"))]
 pub enum ContractEvent {
@@ -20,17 +20,20 @@ pub enum ContractEvent {
     #[event_version("1.0.0")]
     PausedStatusChanged { status: bool },
 
-    // ──── High-frequency feed event: aggressively minimized for gas ────
+    // ──── High-frequency feed event: gas-minimized for the hot path ────
     // Fires on every price feed, so we trade readability for fewer log bytes:
     //   - variant name `F`  → serializes to "event":"f"
     //   - single-char JSON keys: i / p / t  (Rust field names stay readable)
-    // Parallel arrays (not an array of structs) so keys appear once, not per entry.
+    //   - parallel arrays (not an array of structs) so keys appear once, not per entry
+    //
+    // Deliberate exception: prices are decimal strings (U128) — +2 bytes each,
+    // but no JSON parser can silently truncate them (AON-04).
     #[event_version("1.0.0")]
     F {
         #[serde(rename = "i")]
         feed_ids: Vec<u32>,
         #[serde(rename = "p")]
-        prices: Vec<u128>,
+        prices: Vec<U128>,
         #[serde(rename = "t")]
         agg_ts: Vec<u64>,
     },

@@ -1,22 +1,14 @@
+use consumer::FeedDataView;
 use near_api::{AccountId, NearGas, NearToken};
-use near_sdk::serde_json::json;
+use near_sdk::{borsh::BorshSerialize, serde_json::json};
 
 // Mirror of the multi-feed's borsh `FeedUpdate` input.
-#[derive(near_sdk::borsh::BorshSerialize)]
+#[derive(BorshSerialize)]
 #[borsh(crate = "near_sdk::borsh")]
 struct FeedUpdate {
     feed_id: u32,
     price: u128,
     agg_ts: u64,
-}
-
-// Mirror of the `FeedData` view returned by the consumer's callbacks.
-#[derive(near_sdk::serde::Deserialize, Debug)]
-#[serde(crate = "near_sdk::serde")]
-struct FeedData {
-    price: u128,
-    agg_ts: u64,
-    onchain_ts: u64,
 }
 
 #[tokio::test]
@@ -105,7 +97,7 @@ async fn consumer_reads_prices_from_multi_feed() -> testresult::TestResult<()> {
         .assert_success();
 
     // Consumer reads a single price through its cross-contract call.
-    let feed: Option<FeedData> = consumer
+    let feed: Option<FeedDataView> = consumer
         .call_function("get_price", json!({ "feed_id": "0x00000001" }))
         .transaction()
         .gas(NearGas::from_tgas(30))
@@ -115,12 +107,12 @@ async fn consumer_reads_prices_from_multi_feed() -> testresult::TestResult<()> {
         .assert_success()
         .json()?;
     let feed = feed.unwrap();
-    assert_eq!(feed.price, 100);
+    assert_eq!(feed.price.0, 100);
     assert_eq!(feed.agg_ts, now - 1);
     assert!(feed.onchain_ts > 0);
 
     // Consumer reads a batch, including a non-existent feed.
-    let feeds: Vec<Option<FeedData>> = consumer
+    let feeds: Vec<Option<FeedDataView>> = consumer
         .call_function(
             "get_prices",
             json!({ "feed_ids": ["0x00000001", "0x00000002", "0x00000009"] }),
@@ -133,10 +125,10 @@ async fn consumer_reads_prices_from_multi_feed() -> testresult::TestResult<()> {
         .assert_success()
         .json()?;
     assert_eq!(feeds.len(), 3);
-    assert_eq!(feeds[0].as_ref().unwrap().price, 100);
+    assert_eq!(feeds[0].as_ref().unwrap().price.0, 100);
     assert_eq!(feeds[0].as_ref().unwrap().agg_ts, now - 1);
     assert!(feeds[0].as_ref().unwrap().onchain_ts > 0);
-    assert_eq!(feeds[1].as_ref().unwrap().price, 200);
+    assert_eq!(feeds[1].as_ref().unwrap().price.0, 200);
     assert_eq!(feeds[1].as_ref().unwrap().agg_ts, now - 1);
     assert!(feeds[1].as_ref().unwrap().onchain_ts > 0);
     assert!(feeds[2].is_none());
@@ -145,6 +137,7 @@ async fn consumer_reads_prices_from_multi_feed() -> testresult::TestResult<()> {
     multi_feed
         .call_function("set_open_read_status", json!({ "status": false }))
         .transaction()
+        .deposit(NearToken::from_yoctonear(1))
         .gas(NearGas::from_tgas(30))
         .with_signer(owner.account_id().clone(), signer.clone())
         .send_to(&network)
@@ -172,6 +165,7 @@ async fn consumer_reads_prices_from_multi_feed() -> testresult::TestResult<()> {
             json!({ "updates": [{ "account": consumer.account_id(), "status": true }] }),
         )
         .transaction()
+        .deposit(NearToken::from_yoctonear(1))
         .gas(NearGas::from_tgas(30))
         .with_signer(owner.account_id().clone(), signer.clone())
         .send_to(&network)
@@ -179,7 +173,7 @@ async fn consumer_reads_prices_from_multi_feed() -> testresult::TestResult<()> {
         .assert_success();
 
     // Consumer can now read again.
-    let feed: Option<FeedData> = consumer
+    let feed: Option<FeedDataView> = consumer
         .call_function("get_price", json!({ "feed_id": "0x00000001" }))
         .transaction()
         .gas(NearGas::from_tgas(30))
@@ -188,12 +182,13 @@ async fn consumer_reads_prices_from_multi_feed() -> testresult::TestResult<()> {
         .await?
         .assert_success()
         .json()?;
-    assert_eq!(feed.unwrap().price, 100);
+    assert_eq!(feed.unwrap().price.0, 100);
 
     // Admin pauses the contract; reads are blocked.
     multi_feed
         .call_function("set_paused", json!({ "paused": true }))
         .transaction()
+        .deposit(NearToken::from_yoctonear(1))
         .gas(NearGas::from_tgas(30))
         .with_signer(admin.account_id().clone(), signer.clone())
         .send_to(&network)
@@ -218,6 +213,7 @@ async fn consumer_reads_prices_from_multi_feed() -> testresult::TestResult<()> {
     multi_feed
         .call_function("set_open_read_status", json!({ "status": true }))
         .transaction()
+        .deposit(NearToken::from_yoctonear(1))
         .gas(NearGas::from_tgas(30))
         .with_signer(owner.account_id().clone(), signer.clone())
         .send_to(&network)
@@ -241,13 +237,14 @@ async fn consumer_reads_prices_from_multi_feed() -> testresult::TestResult<()> {
     multi_feed
         .call_function("set_paused", json!({ "paused": false }))
         .transaction()
+        .deposit(NearToken::from_yoctonear(1))
         .gas(NearGas::from_tgas(30))
         .with_signer(admin.account_id().clone(), signer.clone())
         .send_to(&network)
         .await?
         .assert_success();
 
-    let feed: Option<FeedData> = consumer
+    let feed: Option<FeedDataView> = consumer
         .call_function("get_price", json!({ "feed_id": "0x00000001" }))
         .transaction()
         .gas(NearGas::from_tgas(30))
@@ -256,7 +253,7 @@ async fn consumer_reads_prices_from_multi_feed() -> testresult::TestResult<()> {
         .await?
         .assert_success()
         .json()?;
-    assert_eq!(feed.unwrap().price, 100);
+    assert_eq!(feed.unwrap().price.0, 100);
 
     Ok(())
 }

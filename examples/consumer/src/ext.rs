@@ -1,9 +1,9 @@
 // External interface to the `multi-feed` oracle contract.
 use near_sdk::{ext_contract, near};
 
-// Mirror of the multi-feed's JSON `FeedData` view (price + agg_ts + onchain_ts).
-#[near(serializers = [json])]
-#[derive(Clone)]
+// Mirror the multi-feed `FeedData` fetch result (price + agg_ts + onchain_ts);
+// standard Borsh, matching the oracle's cross-contract wire format.
+#[near(serializers = [borsh])]
 pub struct FeedData {
     pub price: u128,
     pub agg_ts: u64,

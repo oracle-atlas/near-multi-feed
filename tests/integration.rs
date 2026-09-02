@@ -1,24 +1,6 @@
+use multi_feed::{FeedData, FeedUpdate};
 use near_api::{AccountId, NearGas, NearToken};
-use near_sdk::{json_types::U128, serde_json::json};
-
-// Mirror of the contract's borsh `FeedUpdate` input (feed_id + price + agg_ts).
-#[derive(near_sdk::borsh::BorshSerialize)]
-#[borsh(crate = "near_sdk::borsh")]
-struct FeedUpdate {
-    feed_id: u32,
-    price: u128,
-    agg_ts: u64,
-}
-
-// Mirror of the contract's JSON `FeedData` view (price + agg_ts + onchain_ts).
-// price is deserialized from a decimal string to avoid IEEE-754 precision loss.
-#[derive(near_sdk::serde::Deserialize, Debug)]
-#[serde(crate = "near_sdk::serde")]
-struct FeedData {
-    price: U128,
-    agg_ts: u64,
-    onchain_ts: u64,
-}
+use near_sdk::serde_json::json;
 
 async fn test_basics_on(contract_wasm: Vec<u8>) -> testresult::TestResult<()> {
     let sandbox = near_sandbox::Sandbox::start_sandbox().await?;
@@ -90,13 +72,14 @@ async fn test_basics_on(contract_wasm: Vec<u8>) -> testresult::TestResult<()> {
         .assert_success();
 
     // Read a single feed back (open-read allows any caller).
-    let feed: FeedData = contract
+    let feed: Option<FeedData> = contract
         .call_function("fetch", json!({ "feed_id": "0x00000001" }))
-        .read_only()
+        .read_only_borsh()
         .fetch_from(&sandbox_network)
         .await?
         .data;
-    assert_eq!(feed.price.0, 100);
+    let feed = feed.expect("fetch must return the seeded feed");
+    assert_eq!(feed.price, 100);
     assert_eq!(feed.agg_ts, now - 1);
     assert!(feed.onchain_ts > 0);
 
@@ -106,14 +89,14 @@ async fn test_basics_on(contract_wasm: Vec<u8>) -> testresult::TestResult<()> {
             "fetch_batch",
             json!({ "feed_ids": ["0x00000001", "0x00000002", "0x00000009"] }),
         )
-        .read_only()
+        .read_only_borsh()
         .fetch_from(&sandbox_network)
         .await?
         .data;
     assert_eq!(feeds.len(), 3);
-    assert_eq!(feeds[0].as_ref().unwrap().price.0, 100);
+    assert_eq!(feeds[0].as_ref().unwrap().price, 100);
     assert_eq!(feeds[0].as_ref().unwrap().agg_ts, now - 1);
-    assert_eq!(feeds[1].as_ref().unwrap().price.0, 200);
+    assert_eq!(feeds[1].as_ref().unwrap().price, 200);
     assert_eq!(feeds[1].as_ref().unwrap().agg_ts, now - 1);
     assert!(feeds[2].is_none());
 
@@ -150,15 +133,16 @@ async fn test_basics_on(contract_wasm: Vec<u8>) -> testresult::TestResult<()> {
         .assert_success();
 
     // While paused, reads are rejected.
-    let rpc_querry_err = contract
+    let rpc_query_err = contract
         .call_function("fetch", json!({ "feed_id": "0x00000001" }))
-        .read_only::<FeedData>()
+        .read_only_borsh::<FeedData>()
         .fetch_from(&sandbox_network)
         .await
-        .expect_err("reads must fail while paused");
+        .err()
+        .expect("reads must fail while paused");
     assert!(
-        format!("{rpc_querry_err:?}").contains("Enforced paused"),
-        "unexpected error: {rpc_querry_err:?}"
+        format!("{rpc_query_err:?}").contains("Enforced paused"),
+        "unexpected error: {rpc_query_err:?}"
     );
 
     // A non-admin cannot unpause.
@@ -218,13 +202,14 @@ async fn test_basics_on(contract_wasm: Vec<u8>) -> testresult::TestResult<()> {
         .await?
         .assert_success();
 
-    let feed: FeedData = contract
+    let feed: Option<FeedData> = contract
         .call_function("fetch", json!({ "feed_id": "0x00000003" }))
-        .read_only()
+        .read_only_borsh()
         .fetch_from(&sandbox_network)
         .await?
         .data;
-    assert_eq!(feed.price.0, 300);
+    let feed = feed.expect("fetch must return the newly reported feed");
+    assert_eq!(feed.price, 300);
 
     // A stale agg_ts (not strictly newer than stored) is rejected.
     tx_execution_err = contract
