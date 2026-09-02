@@ -1,35 +1,17 @@
 # Multi Feed (NEAR)
 
-A NEAR price feed oracle contract. Backend reporters submit batched price data via Borsh; consumers read via JSON. Feed IDs follow the EVM `bytes4` convention (`0x` + 8 hex chars).
+A **stateful, on-chain** price feed oracle for NEAR, built to be read by other on-chain contracts — DEXs, lending protocols, derivatives, and similar.
 
-## Build
+Authorized reporters submit batched prices through `f`, a borsh-encoded feed entrypoint; the contract validates each timestamp and stores the latest price per feed. Consumers read those prices through `fetch` / `fetch_batch`, subject to the read mode: **open read** lets anyone query, while **gated read** restricts access to the authorized-caller whitelist. The getters are read-only, so they can also be called for **free** via an RPC view call (off-chain frontends and indexers). On-chain consumers call them via a cross-contract call and read the result in a callback — see [Building a consumer contract](#building-a-consumer-contract).
 
-```bash
-# dev build → target/near/multi_feed.wasm
-just build
-# reproducible build (Docker)
-just build-release
-# build + show wasm size
-just size
-# type-check only (fast)
-just check
-```
+## Methods
 
-## Test
-
-```bash
-# unit + sandbox integration
-just test
-# unit tests only
-cargo test --lib
-```
-
-## Read Interface
+The two feed getters are the main read API; the rest are role and status views.
 
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `fetch(feed_id)` | `Option<FeedData>` | Single feed by ID — `None` if absent |
-| `fetch_batch(feed_ids)` | `Vec<Option<FeedData>>` | Batch feed lookup — each element is `None` if absent |
+| `fetch_batch(feed_ids)` | `Vec<Option<FeedData>>` | Batch feed lookup — each element is `None` if absent; empty `feed_ids` returns an empty vector |
 | `get_owner()` | `AccountId` | Contract owner |
 | `description()` | `String` | Human-readable contract description |
 | `decimals()` | `u8` | Price decimals |
@@ -38,11 +20,25 @@ cargo test --lib
 | `is_product(account)` | `bool` | Check product role |
 | `is_price_reporter(account)` | `bool` | Check price reporter role |
 | `is_authorized_caller(account)` | `bool` | Check authorized caller |
-| `is_paused()` | `bool` | Whether contract is paused |
+| `is_paused()` | `bool` | Whether the contract is paused |
 | `is_open_read()` | `bool` | Whether open-read is enabled |
 | `get_authorized_callers()` | `Vec<AccountId>` | All authorized callers |
 
-## Read Modes
+- `feed_id`: which feed to select, a `0x`-prefixed 8-hex-char string (EVM `bytes4`). Feed ids are assigned by the operator — get the id-to-asset registry from the operator.
+
+> **Failure modes are split:**
+> - **Panics (reverts)** when the contract is paused, when the caller lacks read permission in gated mode, or when a `feed_id` is malformed. Treat an RPC error as "not allowed to read".
+> - **Returns `None`** when reads are allowed but the feed is absent. Callers can fall back or skip.
+
+The getters return **borsh-encoded** results (`#[result_serializer(borsh)]`), which are cheaper to serialize and deserialize than JSON — saving gas on cross-contract calls. The same bytes reach both RPC view callers and cross-contract callbacks. `FeedData` borsh layout:
+
+```text
+Option<FeedData> = [variant: 1 byte (0 = None, 1 = Some)][FeedData]
+FeedData = [price: u128 — 16 bytes LE][agg_ts: u64 — 8 bytes LE][onchain_ts: u64 — 8 bytes LE]
+Vec<Option<FeedData>> = [length: u32 LE][entry]... (fetch_batch)
+```
+
+## Read modes
 
 Two read modes, controlled by the owner:
 
@@ -51,54 +47,54 @@ Two read modes, controlled by the owner:
 
 Either mode is blocked when the contract is paused.
 
-## Feed Data
-
-What `fetch` and `fetch_batch` return. Each entry is the latest price for a feed ID.
-
-```json
-{
-  "price": "123456789012345678",
-  "agg_ts": 1700000000,
-  "onchain_ts": 1700000001
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `price` | `u128` | Raw price value (18 decimal places) |
-| `agg_ts` | `u64` | Reporter's aggregated timestamp (seconds), strictly monotonic per feed |
-| `onchain_ts` | `u64` | Block timestamp at write time (seconds) |
-
-## Borsh Input for `f`
-
-`f` is the batch feed entrypoint. It takes Borsh-encoded `Vec<FeedUpdate>` instead of JSON — Borsh costs far less gas to decode, and this gets called a lot.
-
-| Field | Type | Size |
-|-------|------|------|
-| `feed_id` | `u32` | 4 bytes |
-| `price` | `u128` | 16 bytes |
-| `agg_ts` | `u64` | 8 bytes |
-
-## Feed ID Format
-
-`0x` + 8 case-insensitive hex digits. Example: `"0x0000002a"`.
-
-## Storage
-
-To minimize on-chain storage gas, `FeedData` uses a custom Borsh serialization that packs each entry into 22 bytes instead of the native 36 bytes:
-
-| Field | Native | Packed | Truncation |
-|-------|--------|--------|------------|
-| `price` | 16 bytes | 10 bytes | Low 80 bits (covers up to ~1.2e24) |
-| `agg_ts` | 8 bytes | 6 bytes | Low 48 bits (covers ~8.9M years) |
-| `onchain_ts` | 8 bytes | 6 bytes | Low 48 bits |
-
-The discarded bytes are never needed — the remaining bits can already represent prices up to ~1.2e24 and timestamps spanning ~8.9 million years.
-
-## Access Control
+## Access control
 
 - **Owner**: full control — transfer ownership, manage roles, toggle open-read.
 - **Admin**: can pause / unpause.
 - **Product**: can manage the authorized-caller whitelist.
 - **Price Reporter**: can submit feeds via `f`.
 - **Authorized Caller**: can read when the contract is in gated-read mode.
+
+All privileged calls — `transfer_ownership`, `set_admins`, `set_products`, `set_price_reporters`, `set_authorized_callers`, `set_paused`, `set_open_read_status` — are payable and require exactly 1 yoctoNEAR attached deposit: dApps can only request function-call access keys, which carry no allowance and cannot attach deposits, so these methods can only be invoked through a full-access key.
+
+## Building a consumer contract
+
+NEAR cross-contract calls are asynchronous: a consumer dispatches a Promise to the oracle and reads the result in a callback. Declare the callback argument with `#[callback_unwrap] #[serializer(borsh)]` and decode it into a mirrored struct; if the consumer re-exports prices over its own JSON ABI, wrap the price in `U128` so JS clients read a decimal string instead of a lossy number.
+
+See [`examples/consumer`](https://github.com/oracle-atlas/near-multi-feed/tree/main/examples/consumer) for a complete, runnable reference implementation.
+
+## Development
+
+Prerequisites:
+
+- [Rust](https://rustup.rs) — version pinned by `rust-toolchain.toml`.
+- [`cargo-near`](https://github.com/near/cargo-near) — builds the WASM artifact.
+- [`just`](https://github.com/casey/just) — the project task runner.
+
+### Build
+
+```bash
+just build           # fast, non-reproducible WASM -> target/near/multi_feed.wasm
+just build-release   # reproducible WASM (via Docker)
+just check           # type-check only (fast)
+```
+
+### Test
+
+```bash
+just test            # unit tests + sandbox integration test
+just test-consumer   # cross-contract end-to-end test (consumer example)
+```
+
+### Size
+
+```bash
+just size            # rebuild and print the WASM size in bytes
+just size-only       # print the size without rebuilding
+```
+
+### Clean
+
+```bash
+just clean
+```
