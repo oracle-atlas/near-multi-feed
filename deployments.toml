@@ -25,6 +25,20 @@ price_reporters = [
 ]
 authorized_callers = []
 
+[qa-1-testnet]
+account = "multi-feed-qa-1.atlas-oracle.testnet"
+owner = "michael_wang.testnet"
+description = "MultiFeed"
+open_read_enabled = true
+admins = ["michael_wang.testnet"]
+products = ["michael_wang.testnet"]
+price_reporters = [
+    "michael_wang.testnet",
+    "284a8083be3591190b9f12ce75acf72f76ae889ed5c11b30e087b0f6e4b826a6",
+    "47fa60982de009724c93f2ac95f7505abd131670b477e69c399fc759c99520d2",
+]
+authorized_callers = []
+
 # Add new clients below as you onboard them:
 #
 # [client-name]
